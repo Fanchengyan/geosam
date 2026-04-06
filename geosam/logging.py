@@ -12,14 +12,24 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+    class _TqdmFallback:
+        """Minimal tqdm fallback used when tqdm is unavailable."""
+
+        @staticmethod
+        def write(message: str, file: Any = None) -> None:
+            """Write a message without progress-bar support."""
+            print(message, file=file or sys.stdout)
+
+    tqdm = _TqdmFallback
 
 # Optional imports with fallbacks
 
 
 if TYPE_CHECKING:
     from os import PathLike
-    from typing import Union
 
 __all__ = [
     "SUCCESS",
@@ -38,7 +48,7 @@ SUCCESS: Literal[25] = 25  # Between INFO and WARNING
 # Type aliases
 LogLevel = Literal["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
 if TYPE_CHECKING:
-    HandlerType = Union[logging.Handler, list[logging.Handler]]
+    HandlerType = logging.Handler | list[logging.Handler]
 
 # Register SUCCESS level name
 logging.addLevelName(SUCCESS, "SUCCESS")

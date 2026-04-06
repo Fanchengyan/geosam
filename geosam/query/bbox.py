@@ -1,4 +1,4 @@
-"""A class used for indexing datasets using a spatial bounding box."""
+"""Spatial bounding-box utilities."""
 
 from __future__ import annotations
 
@@ -14,23 +14,33 @@ from geosam.logging import setup_logger
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from shapely.geometry.base import BaseGeometry
+
+    from geosam.typing import CrsLike
+
 logger = setup_logger(__name__)
 
 
 class BoundingBox:
-    """a class used for indexing datasets using a spatial bounding box.
+    """A spatial bounding box with an optional CRS.
 
-    .. note::
-        This class is a modified version of the BoundingBox class from the
-        torchgeo package. The main modifications include:
-
-        - Removal of ``date bounds``
-        - Change of the bounding box to (left, bottom, right, top), which aligns
-          with the :class:`rasterio.coords.BoundingBox` class.
-        - Addition of the CRS attribute to automatically convert the bounding
-          box to the CRS of the dataset.
+    Parameters
+    ----------
+    left : float
+        Western boundary.
+    bottom : float
+        Southern boundary.
+    right : float
+        Eastern boundary.
+    top : float
+        Northern boundary.
+    crs : CrsLike | None, optional
+        Coordinate reference system of the bounds.
 
     """
+
+    __slots__ = ["_crs", "bottom", "left", "right", "top"]
+    __hash__ = object.__hash__
 
     def __init__(
         self,
@@ -38,121 +48,163 @@ class BoundingBox:
         bottom: float,
         right: float,
         top: float,
-        crs: CRS | str | None = None,
+        crs: CrsLike | None = None,
     ) -> None:
-        """Initialize a BoundingBox.
-
-        Parameters
-        ----------
-        left : float
-            The western boundary.
-        bottom : float
-            The southern boundary.
-        right : float
-            The eastern boundary.
-        top : float
-            The northern boundary.
-        crs : CRS | str | None, optional
-            The coordinate reference system of the bounding box. Can be any object
-            that can be passed to :meth:`pyproj.crs.CRS.from_user_input`.
-            Default is None.
-
-        """
+        """Initialize a bounding box."""
         if left > right:
-            msg = f"Bounding box is invalid: 'left={left}' > 'right={right}'"
+            msg = f"Invalid bounding box: left={left} is greater than right={right}."
+            logger.error(msg)
             raise ValueError(msg)
         if bottom > top:
-            msg = f"Bounding box is invalid: 'bottom={bottom}' > 'top={top}'"
+            msg = f"Invalid bounding box: bottom={bottom} is greater than top={top}."
+            logger.error(msg)
             raise ValueError(msg)
 
-        self.left = left
-        self.right = right
-        self.bottom = bottom
-        self.top = top
-        self._crs = crs
+        self.left = float(left)
+        self.bottom = float(bottom)
+        self.right = float(right)
+        self.top = float(top)
+        self._crs = CRS.from_user_input(crs) if crs is not None else None
 
-    def __str__(self) -> str:
-        """Return a string representation of the bounding box."""
+    def __repr__(self) -> str:
+        """Return the representation of the bounding box."""
         return (
-            f"BoundingBox(left={self.left}, bottom={self.bottom}, "
+            "BoundingBox("
+            f"left={self.left}, bottom={self.bottom}, "
             f"right={self.right}, top={self.top}, crs={self.crs})"
         )
 
-    def __repr__(self) -> str:
-        """Return a string representation of the bounding box."""
-        return self.__str__()
+    def __str__(self) -> str:
+        """Return the string representation of the bounding box."""
+        return self.__repr__()
 
-    # https://github.com/PyCQA/pydocstyle/issues/525
-    @overload
-    def __getitem__(self, key: int) -> float:
-        pass
+    def __eq__(self, other: object) -> bool:
+        """Compare two bounding boxes."""
+        if not isinstance(other, BoundingBox):
+            return False
+        return (
+            self.left == other.left
+            and self.bottom == other.bottom
+            and self.right == other.right
+            and self.top == other.top
+            and self.crs == other.crs
+        )
 
     @overload
-    def __getitem__(self, key: slice) -> list[float]:
-        pass
+    def __getitem__(self, key: int) -> float: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> list[float]: ...
 
     def __getitem__(self, key: int | slice) -> float | list[float]:
-        """Index the (left, bottom, right,  top) tuple.
-
-        Args:
-        ----
-            key: integer or slice object
-
-        Returns:
-        -------
-            the value(s) at that index
-
-        Raises:
-        ------
-            IndexError: if key is out of bounds
-
-        """
+        """Index the ``(left, bottom, right, top)`` tuple."""
         return [self.left, self.bottom, self.right, self.top][key]
 
     def __iter__(self) -> Iterator[float]:
-        """Container iterator.
-
-        Returns
-        -------
-            iterator object that iterates over all objects in the container
-
-        """
+        """Iterate over bounds in ``(left, bottom, right, top)`` order."""
         yield from [self.left, self.bottom, self.right, self.top]
 
     def __contains__(self, other: BoundingBox) -> bool:
-        """Whether or not other is within the bounds of this bounding box.
-
-        Args:
-        ----
-            other: another bounding box
-
-        Returns:
-        -------
-            True if other is within this bounding box, else False
-
-        """
-        return (
-            (self.left <= other.left <= self.right)
-            and (self.left <= other.right <= self.right)
-            and (self.bottom <= other.bottom <= self.top)
-            and (self.bottom <= other.top <= self.top)
-        )
+        """Return whether ``other`` is fully contained in this box."""
+        return self.contains(other)
 
     def __or__(self, other: BoundingBox) -> BoundingBox:
-        """Union operator.
+        """Return the union of two bounding boxes."""
+        return self.union(other)
 
-        Parameters
-        ----------
-        other: BoundingBox
-            another bounding box
+    def __and__(self, other: BoundingBox) -> BoundingBox | None:
+        """Return the intersection of two bounding boxes."""
+        return self.intersection(other)
 
-        Returns
-        -------
-        BoundingBox:
-            the minimum bounding box that contains both self and other
+    @property
+    def crs(self) -> CRS | None:
+        """Coordinate reference system of the bounding box."""
+        return self._crs
 
-        """
-        other, crs_new = self._ensure_points_crs(other)
+    @property
+    def area(self) -> float:
+        """Spatial area covered by the bounding box."""
+        return (self.right - self.left) * (self.top - self.bottom)
+
+    @property
+    def center(self) -> tuple[float, float]:
+        """Center point of the bounding box."""
+        return ((self.left + self.right) / 2.0, (self.bottom + self.top) / 2.0)
+
+    @property
+    def width(self) -> float:
+        """Width of the bounding box."""
+        return self.right - self.left
+
+    @property
+    def height(self) -> float:
+        """Height of the bounding box."""
+        return self.top - self.bottom
+
+    def _ensure_shared_crs(self, other: BoundingBox) -> tuple[BoundingBox, CRS | None]:
+        """Convert the other bounding box to the same CRS when possible."""
+        if self.crs == other.crs:
+            return other, self.crs
+
+        if self.crs is None or other.crs is None:
+            crs_new = self.crs or other.crs
+            logger.warning(
+                "Bounding-box CRS is missing. Assuming both bounding boxes are "
+                "already expressed in the same coordinate system."
+            )
+            return other, crs_new
+
+        return other.to_crs(self.crs), self.crs
+
+    def set_crs(self, crs: CRS | str) -> None:
+        """Assign a CRS without reprojection."""
+        self._crs = CRS.from_user_input(crs)
+
+    def to_crs(self, crs: CRS | str) -> BoundingBox:
+        """Reproject the bounding box."""
+        if self.crs is None:
+            msg = "Cannot reproject a bounding box without a source CRS."
+            logger.error(msg)
+            raise ValueError(msg)
+
+        target_crs = CRS.from_user_input(crs)
+        if self.crs == target_crs:
+            return self
+
+        left, bottom, right, top = transform_bounds(
+            self.crs,
+            target_crs,
+            self.left,
+            self.bottom,
+            self.right,
+            self.top,
+        )
+        return BoundingBox(left, bottom, right, top, crs=target_crs)
+
+    def to_tuple(self) -> tuple[float, float, float, float]:
+        """Return ``(left, bottom, right, top)``."""
+        return (self.left, self.bottom, self.right, self.top)
+
+    def to_dict(self) -> dict[str, float]:
+        """Return a dictionary representation."""
+        return {
+            "left": self.left,
+            "bottom": self.bottom,
+            "right": self.right,
+            "top": self.top,
+        }
+
+    def to_geometry(self) -> BaseGeometry:
+        """Convert the bounding box to a Shapely geometry."""
+        return box(self.left, self.bottom, self.right, self.top)
+
+    def to_geodataframe(self) -> gpd.GeoDataFrame:
+        """Convert the bounding box to a GeoDataFrame."""
+        return gpd.GeoDataFrame(geometry=[self.to_geometry()], crs=self.crs)
+
+    def union(self, other: BoundingBox) -> BoundingBox:
+        """Return the minimum box covering both bounding boxes."""
+        other, crs_new = self._ensure_shared_crs(other)
         return BoundingBox(
             min(self.left, other.left),
             min(self.bottom, other.bottom),
@@ -161,175 +213,24 @@ class BoundingBox:
             crs=crs_new,
         )
 
-    def __and__(self, other: BoundingBox) -> BoundingBox | None:
-        """Intersection operator.
-
-        Parameters
-        ----------
-        other: BoundingBox
-            another bounding box
-
-        Returns
-        -------
-        BoundingBox | None:
-            the intersection of self and other. If self and other do not intersect,
-            return None.
-
-        Raises
-        ------
-        ValueError:
-            if self and other do not intersect
-
-        """
-        try:
-            other, crs_new = self._ensure_points_crs(other)
-            return BoundingBox(
-                max(self.left, other.left),
-                max(self.bottom, other.bottom),
-                min(self.right, other.right),
-                min(self.top, other.top),
-                crs=crs_new,
-            )
-        except Exception:
-            msg = f"Bounding boxes {self} and {other} do not overlap"
-            logger.warning(msg, stacklevel=2)
+    def intersection(self, other: BoundingBox) -> BoundingBox | None:
+        """Return the overlapping region of two bounding boxes."""
+        other, crs_new = self._ensure_shared_crs(other)
+        if not self.intersects(other):
+            logger.warning("Bounding boxes %s and %s do not overlap.", self, other)
             return None
 
-    def _ensure_points_crs(self, other: BoundingBox) -> tuple[BoundingBox, CRS]:
-        """Ensure the coordinate reference system of the bbox are the same."""
-        if self.crs != other.crs:
-            if self.crs is None or other.crs is None:
-                crs_new = self.crs or other.crs
-                msg = (
-                    "Cannot find the coordinate reference system of the bbox. "
-                    "The crs of two bbox will assume to be the same. ",
-                )
-                logger.warning(msg, stacklevel=2)
-            else:
-                other = other.to_crs(self.crs)
-                crs_new = self.crs
-        else:
-            crs_new = self.crs
-        return other, crs_new
-
-    @property
-    def area(self) -> float:
-        """Area of bounding box.
-
-        Area is defined as spatial area.
-
-        Returns
-        -------
-            area
-
-        """
-        return (self.right - self.left) * (self.top - self.bottom)
-
-    @property
-    def crs(self) -> CRS | None:
-        """The coordinate reference system of the bounding box."""
-        return self._crs
-
-    def to_crs(self, crs: CRS | str) -> BoundingBox:
-        """Convert the bounding box to a new coordinate reference system.
-
-        Parameters
-        ----------
-        crs : CRS | str
-            The new coordinate reference system. Can be any object that can be
-            passed to :meth:`pyproj.crs.CRS.from_user_input`.
-
-        """
-        if self.crs is None:
-            msg = (
-                "The current coordinate reference system is None. "
-                "Please set the crs using set_crs() first."
-            )
-            raise ValueError(msg)
-        crs = CRS.from_user_input(crs)
-        if self.crs == crs:
-            return self
-        left, bottom, right, top = transform_bounds(
-            self.crs,
-            crs,
-            self.left,
-            self.bottom,
-            self.right,
-            self.top,
+        return BoundingBox(
+            max(self.left, other.left),
+            max(self.bottom, other.bottom),
+            min(self.right, other.right),
+            min(self.top, other.top),
+            crs=crs_new,
         )
-        return BoundingBox(left, bottom, right, top, crs=crs)
-
-    def set_crs(self, crs: CRS | str) -> None:
-        """Set the coordinate reference system of the bounding box.
-
-        Parameters
-        ----------
-        crs : CRS | str
-            The new coordinate reference system. Can be any object that can be
-            passed to :meth:`pyproj.crs.CRS.from_user_input`.
-
-            .. warning::
-                This method will only set the crs attribute without converting
-                the bounding box to a new coordinate reference system. If you
-                want to convert the bounding box values to a new coordinate,
-                please use :meth:`to_crs`
-
-        """
-        self._crs = CRS.from_user_input(crs)
-
-    def to_dict(self) -> dict[str, float]:
-        """Convert the bounding box to a dictionary.
-
-        Returns
-        -------
-            dictionary with keys 'left', 'bottom', 'right', 'top'
-
-        """
-        return {
-            "left": self.left,
-            "bottom": self.bottom,
-            "right": self.right,
-            "top": self.top,
-        }
-
-    def to_tuple(self) -> tuple[float, float, float, float]:
-        """Convert the bounding box to a tuple.
-
-        Returns
-        -------
-            tuple with elements (left, bottom, right, top)
-
-        """
-        return (self.left, self.bottom, self.right, self.top)
-
-    def to_geodataframe(self) -> gpd.GeoDataFrame:
-        """Convert the bounding box to a GeoDataFrame.
-
-        Returns
-        -------
-            GeoDataFrame with the bounding box as a polygon
-
-        """
-        gdf = gpd.GeoDataFrame(
-            geometry=[box(self.left, self.bottom, self.right, self.top)],
-        )
-        gdf.crs = self.crs
-        return gdf
 
     def intersects(self, other: BoundingBox) -> bool:
-        """Whether two bounding boxes intersect.
-
-        Parameters
-        ----------
-        other: BoundingBox
-            another bounding box
-
-        Returns
-        -------
-            True if bounding boxes intersect, else False
-
-        """
-        other, _ = self._ensure_points_crs(other)
+        """Return whether two bounding boxes overlap."""
+        other, _ = self._ensure_shared_crs(other)
         return (
             self.left <= other.right
             and self.right >= other.left
@@ -338,19 +239,8 @@ class BoundingBox:
         )
 
     def contains(self, other: BoundingBox) -> bool:
-        """Whether the bounding box completely contains another bounding box.
-
-        Parameters
-        ----------
-        other: BoundingBox
-            another bounding box
-
-        Returns
-        -------
-            True if bounding box contains another bounding box, else False
-
-        """
-        other, _ = self._ensure_points_crs(other)
+        """Return whether the bounding box fully contains another box."""
+        other, _ = self._ensure_shared_crs(other)
         return (
             self.left <= other.left
             and self.right >= other.right
@@ -363,50 +253,27 @@ class BoundingBox:
         proportion: float,
         horizontal: bool = True,
     ) -> tuple[BoundingBox, BoundingBox]:
-        """Split BoundingBox in two.
-
-        Parameters
-        ----------
-        proportion: float
-            split proportion in range (0,1)
-        horizontal: bool
-            whether the split is horizontal or vertical
-
-        Returns
-        -------
-            A tuple with the resulting BoundingBoxes
-
-        """
-        if not (0.0 < proportion < 1.0):
-            msg = "Input proportion must be between 0 and 1."
+        """Split the bounding box in two."""
+        if not 0.0 < proportion < 1.0:
+            msg = "Split proportion must be between 0 and 1."
+            logger.error(msg)
             raise ValueError(msg)
 
         if horizontal:
-            w = self.right - self.left
-            splitx = self.left + w * proportion
-            bbox1 = BoundingBox(self.left, self.bottom, splitx, self.top, self.crs)
-            bbox2 = BoundingBox(splitx, self.bottom, self.right, self.top, self.crs)
-        else:
-            h = self.top - self.bottom
-            splity = self.bottom + h * proportion
-            bbox1 = BoundingBox(self.left, self.bottom, self.right, splity, self.crs)
-            bbox2 = BoundingBox(self.left, splity, self.right, self.top, self.crs)
+            split_x = self.left + self.width * proportion
+            return (
+                BoundingBox(self.left, self.bottom, split_x, self.top, crs=self.crs),
+                BoundingBox(split_x, self.bottom, self.right, self.top, crs=self.crs),
+            )
 
-        return bbox1, bbox2
+        split_y = self.bottom + self.height * proportion
+        return (
+            BoundingBox(self.left, self.bottom, self.right, split_y, crs=self.crs),
+            BoundingBox(self.left, split_y, self.right, self.top, crs=self.crs),
+        )
 
     def buffer(self, distance: float) -> BoundingBox:
-        """Buffer the bounding box.
-
-        Parameters
-        ----------
-        distance: float
-            the buffer distance in the units of the bounding box
-
-        Returns
-        -------
-            the buffered bounding box
-
-        """
+        """Return a buffered bounding box."""
         return BoundingBox(
             self.left - distance,
             self.bottom - distance,

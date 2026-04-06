@@ -1,15 +1,16 @@
-"""Type aliases for geosam.
+"""Shared type aliases for :mod:`geosam`.
 
-This module defines common type aliases used across the geosam package.
+This module centralizes reusable type aliases shared across the package.
 """
 
 from __future__ import annotations
 
 from os import PathLike as OsPathLike
-from typing import Any
+from typing import Any, TypeAlias
 
 from pyproj.crs import CRS
-from typing_extensions import TypeAlias
 
 CrsLike: TypeAlias = CRS | str | dict[str, Any] | int
-PathLike: TypeAlias = str | OsPathLike
+PathLike: TypeAlias = str | OsPathLike[str]
+Shape2D: TypeAlias = tuple[int, int]
+PixelCoordinate: TypeAlias = tuple[float, float]

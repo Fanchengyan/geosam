@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "geosam"
 version = "0.1.0"
@@ -6,11 +10,10 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "geopandas>=1.0.1",
-    "ipykernel>=6.31.0",
+    "pyarrow>=18.1.0",
     "pyproj>=3.6.1",
     "rasterio>=1.4.3",
     "shapely>=2.0.7",
-    "torchgeo>=0.5.2",
     "typing-extensions>=4.15.0",
     "ultralytics>=8.4.33",
 ]
@@ -34,6 +37,11 @@ docs = [
 ]
 
 dev = ["geosam[code_style, test, docs]"]
+
+
+[tool.setuptools.packages.find]
+include = ["geosam*"]
+exclude = ["tests*", "docs*", "examples*", "outputs*"]
 
 
 [tool.ruff]
