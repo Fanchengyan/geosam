@@ -71,7 +71,7 @@ Expected runtime data flow:
 
 ## Code Conventions
 
-- **Python 3.11+** required
+- **Python 3.9+ and 3.11+ typing** required
 - **`from __future__ import annotations`** in every file
 - **Type hints**: Use Python 3.11+ syntax (`str | None`, `dict[str, int]`). Use `Literal` for fixed value sets. Do not using Union，Optional.
 - **Docstrings**: Use NumPy-style docstrings for all public modules, classes, functions, and methods. Include Parameters, Returns, Raises, and Examples where applicable, and use Sphinx reStructuredText markup such as :func:..., :class:..., and directives like .. note::, .. tip::, and .. warning:: when needed.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Optional, Union, overload
 
 import geopandas as gpd
 from pyproj.crs import CRS
@@ -48,7 +48,7 @@ class BoundingBox:
         bottom: float,
         right: float,
         top: float,
-        crs: CrsLike | None = None,
+        crs: Optional[CrsLike] = None,
     ) -> None:
         """Initialize a bounding box."""
         if left > right:
@@ -96,7 +96,7 @@ class BoundingBox:
     @overload
     def __getitem__(self, key: slice) -> list[float]: ...
 
-    def __getitem__(self, key: int | slice) -> float | list[float]:
+    def __getitem__(self, key: Union[int, slice]) -> Union[float, list[float]]:
         """Index the ``(left, bottom, right, top)`` tuple."""
         return [self.left, self.bottom, self.right, self.top][key]
 
@@ -112,12 +112,12 @@ class BoundingBox:
         """Return the union of two bounding boxes."""
         return self.union(other)
 
-    def __and__(self, other: BoundingBox) -> BoundingBox | None:
+    def __and__(self, other: BoundingBox) -> Optional[BoundingBox]:
         """Return the intersection of two bounding boxes."""
         return self.intersection(other)
 
     @property
-    def crs(self) -> CRS | None:
+    def crs(self) -> Optional[CRS]:
         """Coordinate reference system of the bounding box."""
         return self._crs
 
@@ -141,7 +141,9 @@ class BoundingBox:
         """Height of the bounding box."""
         return self.top - self.bottom
 
-    def _ensure_shared_crs(self, other: BoundingBox) -> tuple[BoundingBox, CRS | None]:
+    def _ensure_shared_crs(
+        self, other: BoundingBox
+    ) -> tuple[BoundingBox, Optional[CRS]]:
         """Convert the other bounding box to the same CRS when possible."""
         if self.crs == other.crs:
             return other, self.crs
@@ -156,11 +158,11 @@ class BoundingBox:
 
         return other.to_crs(self.crs), self.crs
 
-    def set_crs(self, crs: CRS | str) -> None:
+    def set_crs(self, crs: Union[CRS, str]) -> None:
         """Assign a CRS without reprojection."""
         self._crs = CRS.from_user_input(crs)
 
-    def to_crs(self, crs: CRS | str) -> BoundingBox:
+    def to_crs(self, crs: Union[CRS, str]) -> BoundingBox:
         """Reproject the bounding box."""
         if self.crs is None:
             msg = "Cannot reproject a bounding box without a source CRS."
@@ -213,7 +215,7 @@ class BoundingBox:
             crs=crs_new,
         )
 
-    def intersection(self, other: BoundingBox) -> BoundingBox | None:
+    def intersection(self, other: BoundingBox) -> Optional[BoundingBox]:
         """Return the overlapping region of two bounding boxes."""
         other, crs_new = self._ensure_shared_crs(other)
         if not self.intersects(other):

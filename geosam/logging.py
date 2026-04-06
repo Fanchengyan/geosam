@@ -10,11 +10,12 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 try:
     from tqdm import tqdm
 except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+
     class _TqdmFallback:
         """Minimal tqdm fallback used when tqdm is unavailable."""
 
@@ -188,14 +189,14 @@ def get_default_log_level() -> int:
 
 
 def setup_logger(
-    name: str | None = None,
-    file: str | PathLike[str] | None = None,  # type: ignore[name-defined]
+    name: Optional[str] = None,
+    file: Optional[Union[str, PathLike[str]]] = None,  # type: ignore[name-defined]
     *,
     # Backward-compatible aliases
-    log_name: str | None = None,
-    log_file: str | PathLike[str] | None = None,  # type: ignore[name-defined]
-    handler: logging.Handler | list[logging.Handler] = stream_handler,  # type: ignore[assignment]
-    level: int | None = None,
+    log_name: Optional[str] = None,
+    log_file: Optional[Union[str, PathLike[str]]] = None,  # type: ignore[name-defined]
+    handler: Union[logging.Handler, list[logging.Handler]] = stream_handler,  # type: ignore[assignment]
+    level: Optional[int] = None,
     propagate: bool = True,
     clear_existing: bool = False,
 ) -> GeosamLogger:

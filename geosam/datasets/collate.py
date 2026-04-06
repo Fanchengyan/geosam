@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Union
 
 import numpy as np
 
@@ -12,7 +12,7 @@ from geosam.logging import setup_logger
 logger = setup_logger(__name__)
 
 
-def stack_samples(samples: list[RasterSample | dict[str, Any]]) -> dict[str, Any]:
+def stack_samples(samples: list[Union[RasterSample, dict[str, Any]]]) -> dict[str, Any]:
     """Stack raster samples into a single batch dictionary."""
     if len(samples) == 0:
         msg = "stack_samples requires at least one sample."

@@ -12,7 +12,7 @@ import importlib.util
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Union
 
 from geosam.datasets import RasterDataset
 from geosam.logging import setup_logger
@@ -25,7 +25,7 @@ logger = setup_logger(__name__)
 DEFAULT_MODEL_REPOSITORY = "https://github.com/Fanchengyan/geosam-models"
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class ModelDefinition:
     """Supported downloadable model metadata.
 
@@ -51,7 +51,7 @@ class ModelDefinition:
     supports_feature_reuse: bool = True
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class FeatureSourceSummary:
     """Summary metadata for a cached GeoSAM feature source.
 
@@ -88,13 +88,13 @@ MODEL_DEFINITIONS: tuple[ModelDefinition, ...] = (
     ModelDefinition("sam2.1_s", "SAM2.1 Small", "sam2", "sam2.1_s.pt"),
     ModelDefinition("sam2.1_b", "SAM2.1 Base", "sam2", "sam2.1_b.pt"),
     ModelDefinition("sam2.1_l", "SAM2.1 Large", "sam2", "sam2.1_l.pt"),
-    ModelDefinition("sam3", "SAM3", "sam3", "sam3.pt", supports_feature_reuse=False),
+    ModelDefinition("sam3", "SAM3", "sam3", "sam3.pt", supports_feature_reuse=True),
     ModelDefinition(
         "sam3.1_multiplex",
         "SAM3.1 Multiplex",
         "sam3",
         "sam3.1_multiplex.pt",
-        supports_feature_reuse=False,
+        supports_feature_reuse=True,
     ),
 )
 
@@ -139,9 +139,9 @@ def get_model_display_items() -> list[tuple[str, str]]:
 
 
 def infer_model_id_from_checkpoint_path(
-    checkpoint_path: str | Path,
+    checkpoint_path: Union[str, Path],
     *,
-    fallback_model_id: str | None = None,
+    fallback_model_id: Optional[str] = None,
 ) -> str:
     """Infer a registered model id from a checkpoint path.
 
@@ -184,9 +184,9 @@ def infer_model_id_from_checkpoint_path(
 
 def create_model_spec(
     model_id: str,
-    checkpoint_path: str | Path,
+    checkpoint_path: Union[str, Path],
     *,
-    device: str | None = None,
+    device: Optional[str] = None,
 ) -> ModelSpec:
     """Create a model spec for a registered model and explicit checkpoint path.
 
@@ -215,10 +215,10 @@ def create_model_spec(
 
 
 def create_model_spec_from_checkpoint(
-    checkpoint_path: str | Path,
+    checkpoint_path: Union[str, Path],
     *,
-    model_id: str | None = None,
-    device: str | None = None,
+    model_id: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> ModelSpec:
     """Create a model spec from an arbitrary checkpoint path.
 
@@ -271,7 +271,7 @@ def dependency_status() -> dict[str, bool]:
     }
 
 
-def resolve_feature_manifest_path(feature_dir: str | Path) -> Path:
+def resolve_feature_manifest_path(feature_dir: Union[str, Path]) -> Path:
     """Resolve the manifest path for a feature folder.
 
     Parameters
@@ -290,7 +290,7 @@ def resolve_feature_manifest_path(feature_dir: str | Path) -> Path:
     return FeatureQueryEngine.resolve_manifest_path(feature_dir)
 
 
-def describe_feature_source(feature_dir: str | Path) -> FeatureSourceSummary:
+def describe_feature_source(feature_dir: Union[str, Path]) -> FeatureSourceSummary:
     """Load summary metadata for a GeoSAM feature folder.
 
     Parameters
@@ -377,13 +377,13 @@ def _resolve_feature_crs_text(frame: Any) -> str:
 
 
 def chip_extent_rectangles_for_source(
-    source_path: str | Path,
+    source_path: Union[str, Path],
     *,
-    bands: list[int] | None = None,
-    crs: str | None = None,
-    res: float | None = None,
-    extent: tuple[float, float, float, float] | None = None,
-    extent_crs: str | None = None,
+    bands: Optional[list[int]] = None,
+    crs: Optional[str] = None,
+    res: Optional[float] = None,
+    extent: Optional[tuple[float, float, float, float]] = None,
+    extent_crs: Optional[str] = None,
     chip_size: int = 1024,
     stride: int = 512,
 ) -> list[tuple[float, float, float, float]]:
@@ -430,7 +430,8 @@ def chip_extent_rectangles_for_source(
             crs=extent_crs or dataset.crs,
         )
         roi_bounds = (
-            extent_bounds if extent_bounds.crs == dataset.crs
+            extent_bounds
+            if extent_bounds.crs == dataset.crs
             else extent_bounds.to_crs(dataset.crs)
         )
         intersection = roi_bounds & dataset.bounds

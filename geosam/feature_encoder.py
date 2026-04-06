@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union
 
 from geosam.models import (
     EncodedImageFeatures,
@@ -43,12 +43,12 @@ class SAMFeatureEncoder:
 
     def __init__(
         self,
-        checkpoint_path: str | Path,
-        imgsz: int | tuple[int, int] = 1024,
-        device: str | torch.device | None = None,
+        checkpoint_path: Union[str, Path],
+        imgsz: Union[int, tuple[int, int]] = 1024,
+        device: Optional[Union[str, torch.device]] = None,
         *,
         model_type: ModelType = "sam",
-        supports_feature_reuse: bool | None = None,
+        supports_feature_reuse: Optional[bool] = None,
     ) -> None:
         """Initialize a SAM feature encoder wrapper."""
         self.spec = ModelSpec(
@@ -67,7 +67,7 @@ class SAMFeatureEncoder:
     def encode_to_file(
         self,
         image: ImageSource,
-        file_path: str | Path,
+        file_path: Union[str, Path],
     ) -> EncodedImageFeatures:
         """Encode an image and persist the resulting features."""
         encoded = self.encode(image)
@@ -76,8 +76,8 @@ class SAMFeatureEncoder:
 
     def load_features(
         self,
-        file_path: str | Path,
-        map_location: str | torch.device = "cpu",
+        file_path: Union[str, Path],
+        map_location: Union[str, torch.device] = "cpu",
     ) -> EncodedImageFeatures:
         """Load encoded features from a file."""
         return EncodedImageFeatures.load(file_path, map_location=map_location)
@@ -86,13 +86,13 @@ class SAMFeatureEncoder:
         self,
         encoded: EncodedImageFeatures,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | object | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, object]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
-        dst_shape: tuple[int, int] | None = None,
-    ) -> tuple[torch.Tensor | None, torch.Tensor]:
+        dst_shape: Optional[tuple[int, int]] = None,
+    ) -> tuple[Optional[torch.Tensor], torch.Tensor]:
         """Run promptable inference from cached features."""
         prediction = self.adapter.predict_features(
             encoded,
@@ -107,16 +107,16 @@ class SAMFeatureEncoder:
 
     def inference_feature_file(
         self,
-        file_path: str | Path,
+        file_path: Union[str, Path],
         *,
-        map_location: str | torch.device = "cpu",
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | object | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        map_location: Union[str, torch.device] = "cpu",
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, object]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
-        dst_shape: tuple[int, int] | None = None,
-    ) -> tuple[torch.Tensor | None, torch.Tensor]:
+        dst_shape: Optional[tuple[int, int]] = None,
+    ) -> tuple[Optional[torch.Tensor], torch.Tensor]:
         """Load cached features and run promptable inference."""
         encoded = self.load_features(file_path, map_location=map_location)
         return self.inference_features(
@@ -133,10 +133,10 @@ class SAMFeatureEncoder:
         self,
         image: ImageSource,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | object | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, object]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
     ) -> GeoSamPrediction:
         """Run promptable inference directly from an image."""

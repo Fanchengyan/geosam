@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pprint
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import numpy as np
 from pyproj.crs import CRS
@@ -16,10 +16,10 @@ from geosam.query import BoundingBox, Points
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Self
 
     import numpy.typing as npt
     from rasterio.io import DatasetReader
+    from typing_extensions import Self
 
     from geosam.typing import CrsLike
 
@@ -47,7 +47,7 @@ def _offset_from_loc(
     return OFFSET_LOCATIONS[loc]
 
 
-def _normalize_shape(value: int | tuple[int, int]) -> tuple[int, int]:
+def _normalize_shape(value: Union[int, tuple[int, int]]) -> tuple[int, int]:
     """Normalize a shape-like input to ``(height, width)``."""
     if isinstance(value, int):
         return (value, value)
@@ -168,11 +168,11 @@ class GeoGrid(GeoGridMixin):
     @classmethod
     def from_bounds(
         cls,
-        bounds: BoundingBox | tuple[float, float, float, float],
+        bounds: Union[BoundingBox, tuple[float, float, float, float]],
         *,
-        res: float | tuple[float, float] | None = None,
-        shape: tuple[int, int] | None = None,
-        crs: CrsLike | None = None,
+        res: Optional[Union[float, tuple[float, float]]] = None,
+        shape: Optional[tuple[int, int]] = None,
+        crs: Optional[CrsLike] = None,
     ) -> Self:
         """Build a GeoGrid from bounds and either resolution or shape."""
         bounds, resolved_crs = format_bounds_and_crs(bounds, crs)
@@ -212,8 +212,8 @@ class GeoGrid(GeoGridMixin):
         self,
         crs: CrsLike,
         *,
-        res: float | tuple[float, float] | None = None,
-        shape: tuple[int, int] | None = None,
+        res: Optional[Union[float, tuple[float, float]]] = None,
+        shape: Optional[tuple[int, int]] = None,
     ) -> GeoGrid:
         """Return a reprojected GeoGrid."""
         left, bottom, right, top = self.bounds
@@ -291,7 +291,7 @@ class GeoGrid(GeoGridMixin):
     def scale_pixel_coordinates(
         self,
         coordinates: np.ndarray,
-        dst_shape: tuple[int, int] | None = None,
+        dst_shape: Optional[tuple[int, int]] = None,
     ) -> np.ndarray:
         """Scale pixel coordinates from source shape into another destination shape."""
         if dst_shape is None or tuple(dst_shape) == self.shape:
@@ -339,10 +339,10 @@ class GeoGrid(GeoGridMixin):
     def to_points_prompt(
         self,
         points: Points,
-        dst_shape: tuple[int, int] | None = None,
+        dst_shape: Optional[tuple[int, int]] = None,
         *,
         strict: bool = True,
-    ) -> tuple[np.ndarray, np.ndarray | None]:
+    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
         """Convert geographic points into pixel prompt coordinates."""
         projected = points if points.crs == self.crs else points.to_crs(self.crs)
         row_values, col_values = self.row_col(projected.x, projected.y, op=float)
@@ -354,7 +354,7 @@ class GeoGrid(GeoGridMixin):
     def to_bbox_prompt(
         self,
         bbox: BoundingBox,
-        dst_shape: tuple[int, int] | None = None,
+        dst_shape: Optional[tuple[int, int]] = None,
         *,
         strict: bool = True,
     ) -> tuple[float, float, float, float]:
@@ -393,7 +393,7 @@ class GeoGrid(GeoGridMixin):
         self,
         x: npt.ArrayLike,
         y: npt.ArrayLike,
-        op: Callable | None = None,
+        op: Optional[Callable] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Convert world coordinates to row/column indices."""
         row_values, col_values = rowcol(self.transform, x, y, op=op)
@@ -411,7 +411,7 @@ class GeoGrid(GeoGridMixin):
 
 
 def xy_from_transform(
-    affine_transform: Affine | None,
+    affine_transform: Optional[Affine],
     width: int,
     height: int,
     *,
@@ -431,8 +431,8 @@ def xy_from_transform(
 
 
 def format_bounds_and_crs(
-    bounds: BoundingBox | tuple[float, float, float, float],
-    crs: CrsLike | None,
+    bounds: Union[BoundingBox, tuple[float, float, float, float]],
+    crs: Optional[CrsLike],
 ) -> tuple[BoundingBox, CRS]:
     """Normalize bounds and CRS input."""
     if not isinstance(bounds, BoundingBox):

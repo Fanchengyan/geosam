@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import geopandas as gpd
 import numpy as np
@@ -31,7 +31,7 @@ class MaskVectorizer:
         *,
         transform: Affine,
         crs: CrsLike,
-        properties: dict[str, Any] | None = None,
+        properties: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize a bound mask vectorizer.
 
@@ -57,7 +57,7 @@ class MaskVectorizer:
         cls,
         query_result: QueryResult,
         *,
-        properties: dict[str, Any] | None = None,
+        properties: Optional[dict[str, Any]] = None,
     ) -> MaskVectorizer:
         """Build a vectorizer bound to a :class:`geosam.engines.QueryResult`.
 
@@ -92,7 +92,7 @@ class MaskVectorizer:
         self,
         *,
         mask_index: int = 0,
-        properties: dict[str, Any] | None = None,
+        properties: Optional[dict[str, Any]] = None,
     ) -> gpd.GeoDataFrame:
         """Convert the bound mask array into polygon features.
 
@@ -124,7 +124,7 @@ class MaskVectorizer:
         self,
         *,
         mask_index: int = 0,
-        properties: dict[str, Any] | None = None,
+        properties: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Convert the bound mask result to a GeoJSON dictionary."""
         frame = self.to_geodataframe(
@@ -138,7 +138,7 @@ class MaskVectorizer:
         output_path: PathLike,
         *,
         mask_index: int = 0,
-        properties: dict[str, Any] | None = None,
+        properties: Optional[dict[str, Any]] = None,
     ) -> Path:
         """Write the bound mask result to a GeoJSON file."""
         payload = self.to_geojson(
@@ -199,7 +199,7 @@ def _vectorize_mask(
     transform: Affine,
     crs: CrsLike,
     mask_index: int = 0,
-    properties: dict[str, Any] | None = None,
+    properties: Optional[dict[str, Any]] = None,
 ) -> gpd.GeoDataFrame:
     """Convert a mask array into polygon features.
 

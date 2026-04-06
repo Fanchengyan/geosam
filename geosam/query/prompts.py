@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Optional, Union
+
+from typing_extensions import TypeAlias
 
 from geosam.logging import setup_logger
 from geosam.query.bbox import BoundingBox
@@ -14,10 +16,10 @@ if TYPE_CHECKING:
 
 logger = setup_logger(__name__)
 
-GeoQuery: TypeAlias = BoundingBox | Points | PromptSet
+GeoQuery: TypeAlias = Union[BoundingBox, Points, PromptSet]
 
 
-def normalize_chip_size(chip_size: int | tuple[int, int]) -> tuple[int, int]:
+def normalize_chip_size(chip_size: Union[int, tuple[int, int]]) -> tuple[int, int]:
     """Normalize chip size to ``(height, width)``."""
     if isinstance(chip_size, int):
         return (chip_size, chip_size)
@@ -44,7 +46,7 @@ def query_center(query: GeoQuery) -> tuple[float, float]:
 
 def window_from_center(
     center: tuple[float, float],
-    chip_size: int | tuple[int, int],
+    chip_size: Union[int, tuple[int, int]],
     *,
     grid: GeoGrid,
 ) -> BoundingBox:
@@ -75,7 +77,7 @@ def window_from_center(
 def points_to_prompt(
     points: Points,
     chip_grid: GeoGrid,
-    dst_shape: tuple[int, int] | None = None,
+    dst_shape: Optional[tuple[int, int]] = None,
     *,
     strict: bool = True,
 ) -> tuple[object, object]:
@@ -86,7 +88,7 @@ def points_to_prompt(
 def bbox_to_prompt(
     bbox: BoundingBox,
     chip_grid: GeoGrid,
-    dst_shape: tuple[int, int] | None = None,
+    dst_shape: Optional[tuple[int, int]] = None,
     *,
     strict: bool = True,
 ) -> tuple[float, float, float, float]:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union
 
 from geosam.logging import setup_logger
 from geosam.query.prompts import normalize_chip_size
@@ -17,7 +17,7 @@ logger = setup_logger(__name__)
 
 
 def _normalize_overlap(
-    overlap: int | tuple[int, int] | None,
+    overlap: Optional[Union[int, tuple[int, int]]],
 ) -> tuple[int, int]:
     """Normalize overlap input."""
     if overlap is None:
@@ -44,9 +44,9 @@ class GridGeoSampler:
         self,
         dataset: RasterDataset,
         *,
-        chip_size: int | tuple[int, int],
-        stride: int | tuple[int, int] | None = None,
-        overlap: int | tuple[int, int] | None = None,
+        chip_size: Union[int, tuple[int, int]],
+        stride: Optional[Union[int, tuple[int, int]]] = None,
+        overlap: Optional[Union[int, tuple[int, int]]] = None,
     ) -> None:
         """Initialize a grid sampler."""
         self.dataset = dataset

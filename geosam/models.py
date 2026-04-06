@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, TypedDict, Union
 
 import numpy as np
 import torch
@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 logger = setup_logger(__name__)
 
 ModelType = Literal["sam", "sam2", "sam3"]
-ImageSource = str | Path | np.ndarray
-PromptBoxes = np.ndarray | list[list[float]]
-PromptPoints = np.ndarray | list[list[float]]
-PromptLabels = np.ndarray | list[int]
-PromptMasks = np.ndarray | list[np.ndarray]
+ImageSource = Union[str, Path, np.ndarray]
+PromptBoxes = Union[np.ndarray, list[list[float]]]
+PromptPoints = Union[np.ndarray, list[list[float]]]
+PromptLabels = Union[np.ndarray, list[int]]
+PromptMasks = Union[np.ndarray, list[np.ndarray]]
 
 
 class SAM2FeaturePayload(TypedDict):
@@ -35,13 +35,13 @@ class SAM2FeaturePayload(TypedDict):
     high_res_feats: list[torch.Tensor]
 
 
-EncodedFeaturePayload = torch.Tensor | SAM2FeaturePayload
+EncodedFeaturePayload = Union[torch.Tensor, SAM2FeaturePayload]
 FeatureKind = Literal["sam", "sam2"]
 
 
 def _clone_feature_payload(
     features: EncodedFeaturePayload,
-    device: str | torch.device | None = None,
+    device: Optional[Union[str, torch.device]] = None,
 ) -> EncodedFeaturePayload:
     """Clone a feature payload and optionally move it to another device."""
     if isinstance(features, torch.Tensor):
@@ -76,7 +76,7 @@ def _feature_kind(features: EncodedFeaturePayload) -> FeatureKind:
     return "sam2" if isinstance(features, dict) else "sam"
 
 
-def _normalize_shape(shape: int | tuple[int, int] | list[int]) -> tuple[int, int]:
+def _normalize_shape(shape: Union[int, tuple[int, int], list[int]]) -> tuple[int, int]:
     """Normalize an image-size value to ``(height, width)``."""
     if isinstance(shape, int):
         return (shape, shape)
@@ -87,7 +87,7 @@ def _normalize_shape(shape: int | tuple[int, int] | list[int]) -> tuple[int, int
     return (int(shape[0]), int(shape[1]))
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class ModelSpec:
     """Configuration describing a GeoSAM model instance.
 
@@ -108,10 +108,10 @@ class ModelSpec:
     """
 
     model_type: ModelType
-    checkpoint_path: str | Path
-    device: str | torch.device | None = None
-    imgsz: int | tuple[int, int] = 1024
-    supports_feature_reuse: bool | None = None
+    checkpoint_path: Union[str, Path]
+    device: Optional[Union[str, torch.device]] = None
+    imgsz: Union[int, tuple[int, int]] = 1024
+    supports_feature_reuse: Optional[bool] = None
 
     @property
     def resolved_checkpoint_path(self) -> str:
@@ -128,10 +128,13 @@ class ModelSpec:
         """Return the effective feature-reuse capability flag."""
         if self.supports_feature_reuse is not None:
             return self.supports_feature_reuse
-        return self.model_type in {"sam", "sam2"}
+        if self.model_type in {"sam", "sam2"}:
+            return True
+        checkpoint_name = Path(self.checkpoint_path).name.lower()
+        return checkpoint_name in {"sam3.pt", "sam3.1_multiplex.pt"}
 
 
-@dataclass(slots=True)
+@dataclass
 class EncodedImageFeatures:
     """Encoded image features that can be persisted and reused."""
 
@@ -167,7 +170,7 @@ class EncodedImageFeatures:
             "structure": structure,
         }
 
-    def save(self, file_path: str | Path) -> Path:
+    def save(self, file_path: Union[str, Path]) -> Path:
         """Persist encoded features to disk."""
         target_path = Path(file_path).expanduser().resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,8 +188,8 @@ class EncodedImageFeatures:
     @classmethod
     def load(
         cls,
-        file_path: str | Path,
-        map_location: str | torch.device = "cpu",
+        file_path: Union[str, Path],
+        map_location: Union[str, torch.device] = "cpu",
     ) -> EncodedImageFeatures:
         """Load encoded features from a file."""
         source_path = Path(file_path).expanduser().resolve()
@@ -212,11 +215,11 @@ class EncodedImageFeatures:
         )
 
 
-@dataclass(slots=True)
+@dataclass
 class GeoSamPrediction:
     """Model prediction output for prompt-based segmentation."""
 
-    masks: torch.Tensor | None
+    masks: Optional[torch.Tensor]
     boxes: torch.Tensor
 
     @property
@@ -239,10 +242,10 @@ class GeoSamModelAdapter(Protocol):
         self,
         image: ImageSource,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | Points | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
     ) -> GeoSamPrediction:
         """Run prompt-based prediction from an image."""
@@ -251,12 +254,12 @@ class GeoSamModelAdapter(Protocol):
         self,
         encoded: EncodedImageFeatures,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | Points | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
-        dst_shape: tuple[int, int] | None = None,
+        dst_shape: Optional[tuple[int, int]] = None,
     ) -> GeoSamPrediction:
         """Run prompt-based prediction from cached features."""
 
@@ -347,9 +350,9 @@ class UltralyticsSamAdapter:
 
     @staticmethod
     def _normalize_point_prompts(
-        points: PromptPoints | Points | None,
-        labels: PromptLabels | None,
-    ) -> tuple[PromptPoints | None, PromptLabels | None]:
+        points: Optional[Union[PromptPoints, Points]],
+        labels: Optional[PromptLabels],
+    ) -> tuple[Optional[PromptPoints], Optional[PromptLabels]]:
         """Normalize point prompts into coordinates and labels."""
         if points is None:
             return None, labels
@@ -368,9 +371,17 @@ class UltralyticsSamAdapter:
 
         return points, labels
 
-    def encode_image(self, image: ImageSource) -> EncodedImageFeatures:
-        """Encode an image into reusable SAM features."""
-        self._ensure_feature_reuse_supported()
+    def _encode_image_features(
+        self,
+        image: ImageSource,
+        *,
+        require_feature_reuse: bool = True,
+        output_device: Optional[Union[str, torch.device]] = "cpu",
+    ) -> EncodedImageFeatures:
+        """Encode an image into an ``EncodedImageFeatures`` payload."""
+        if require_feature_reuse:
+            self._ensure_feature_reuse_supported()
+
         predictor = self._ensure_predictor()
         predictor.set_image(str(image) if isinstance(image, Path) else image)
         if predictor.features is None:
@@ -383,22 +394,28 @@ class UltralyticsSamAdapter:
             checkpoint_path=self.spec.resolved_checkpoint_path,
             src_shape=self._source_shape_from_image(image),
             dst_shape=_normalize_shape(predictor.args.imgsz),
-            features=_clone_feature_payload(predictor.features, device="cpu"),
+            features=_clone_feature_payload(
+                predictor.features,
+                device=output_device,
+            ),
         )
 
-    def predict_features(
+    def _predict_from_encoded_features(
         self,
         encoded: EncodedImageFeatures,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | Points | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
-        dst_shape: tuple[int, int] | None = None,
+        dst_shape: Optional[tuple[int, int]] = None,
+        require_feature_reuse: bool = True,
     ) -> GeoSamPrediction:
-        """Run promptable inference from cached image features."""
-        self._ensure_feature_reuse_supported()
+        """Run promptable inference from an encoded feature payload."""
+        if require_feature_reuse:
+            self._ensure_feature_reuse_supported()
+
         self._validate_checkpoint_match(encoded)
 
         normalized_points, normalized_labels = self._normalize_point_prompts(
@@ -427,14 +444,40 @@ class UltralyticsSamAdapter:
         )
         return GeoSamPrediction(masks=pred_masks, boxes=pred_boxes)
 
+    def encode_image(self, image: ImageSource) -> EncodedImageFeatures:
+        """Encode an image into reusable SAM features."""
+        return self._encode_image_features(image)
+
+    def predict_features(
+        self,
+        encoded: EncodedImageFeatures,
+        *,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
+        multimask_output: bool = False,
+        dst_shape: Optional[tuple[int, int]] = None,
+    ) -> GeoSamPrediction:
+        """Run promptable inference from cached image features."""
+        return self._predict_from_encoded_features(
+            encoded,
+            bboxes=bboxes,
+            points=points,
+            labels=labels,
+            masks=masks,
+            multimask_output=multimask_output,
+            dst_shape=dst_shape,
+        )
+
     def predict_image(
         self,
         image: ImageSource,
         *,
-        bboxes: PromptBoxes | None = None,
-        points: PromptPoints | Points | None = None,
-        labels: PromptLabels | None = None,
-        masks: PromptMasks | None = None,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
         multimask_output: bool = False,
     ) -> GeoSamPrediction:
         """Run promptable inference directly from an image."""
@@ -450,7 +493,7 @@ class UltralyticsSamAdapter:
 
 
 class Sam3ModelAdapter(UltralyticsSamAdapter):
-    """Adapter entry reserved for SAM3-style checkpoints."""
+    """Ultralytics-backed adapter for SAM3 checkpoints."""
 
     def _ensure_feature_reuse_supported(self) -> None:
         """Require explicit opt-in for SAM3 feature reuse."""
@@ -462,6 +505,31 @@ class Sam3ModelAdapter(UltralyticsSamAdapter):
             )
             logger.error(msg)
             raise NotImplementedError(msg)
+
+    def predict_image(
+        self,
+        image: ImageSource,
+        *,
+        bboxes: Optional[PromptBoxes] = None,
+        points: Optional[Union[PromptPoints, Points]] = None,
+        labels: Optional[PromptLabels] = None,
+        masks: Optional[PromptMasks] = None,
+        multimask_output: bool = False,
+    ) -> GeoSamPrediction:
+        """Run SAM3 promptable inference without requiring cached-feature mode."""
+        encoded = self._encode_image_features(
+            image,
+            require_feature_reuse=False,
+        )
+        return self._predict_from_encoded_features(
+            encoded,
+            bboxes=bboxes,
+            points=points,
+            labels=labels,
+            masks=masks,
+            multimask_output=multimask_output,
+            require_feature_reuse=False,
+        )
 
 
 def build_model_adapter(spec: ModelSpec) -> GeoSamModelAdapter:

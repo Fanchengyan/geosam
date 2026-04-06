@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from os import fspath
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 import rasterio
@@ -58,7 +58,7 @@ def _normalize_raster_source(source_path: PathLike) -> str:
     return source_text
 
 
-@dataclass(slots=True)
+@dataclass
 class RasterSample:
     """A raster chip read from a source dataset.
 
@@ -106,7 +106,7 @@ class RasterSample:
         self,
         *,
         pca: bool = False,
-        value_range: tuple[float, float] | None = None,
+        value_range: Optional[tuple[float, float]] = None,
     ) -> np.ndarray:
         """Convert the raster chip into an ``HWC`` uint8 image for SAM.
 
@@ -152,7 +152,7 @@ class RasterSample:
 def _normalize_band_to_uint8(
     band: np.ndarray,
     *,
-    value_range: tuple[float, float] | None = None,
+    value_range: Optional[tuple[float, float]] = None,
 ) -> np.ndarray:
     """Normalize a single band into ``uint8`` range."""
     if band.dtype == np.uint8:
@@ -239,10 +239,10 @@ class RasterDataset:
         self,
         source_path: PathLike,
         *,
-        indexes: Sequence[int] | None = None,
+        indexes: Optional[Sequence[int]] = None,
         fill_value: float = 0,
-        crs: CrsLike | None = None,
-        res: float | tuple[float, float] | None = None,
+        crs: Optional[CrsLike] = None,
+        res: Optional[Union[float, tuple[float, float]]] = None,
         resampling: Resampling = Resampling.average,
     ) -> None:
         """Initialize a raster-backed dataset.
@@ -269,7 +269,7 @@ class RasterDataset:
         self.source_path = _normalize_raster_source(source_path)
         self.fill_value = fill_value
         self.resampling = resampling
-        self._vrt_options: dict[str, object] | None = None
+        self._vrt_options: Optional[dict[str, object]] = None
         try:
             with rasterio.open(self.source_path) as dataset:
                 self.source_crs = dataset.crs
@@ -302,8 +302,8 @@ class RasterDataset:
 
     @staticmethod
     def _normalize_res(
-        res: float | tuple[float, float] | None,
-    ) -> tuple[float, float] | None:
+        res: Optional[Union[float, tuple[float, float]]],
+    ) -> Optional[tuple[float, float]]:
         """Normalize output resolution to ``(x_res, y_res)``."""
         if res is None:
             return None
@@ -315,9 +315,9 @@ class RasterDataset:
         self,
         dataset: rasterio.io.DatasetReader,
         *,
-        crs: CrsLike | None,
-        res: float | tuple[float, float] | None,
-    ) -> dict[str, object] | None:
+        crs: Optional[CrsLike],
+        res: Optional[Union[float, tuple[float, float]]],
+    ) -> Optional[dict[str, object]]:
         """Build WarpedVRT options for output reprojection and resampling."""
         target_crs = dataset.crs if crs is None else CRS.from_user_input(crs)
         target_res = self._normalize_res(res)
@@ -338,20 +338,22 @@ class RasterDataset:
                 *dataset.bounds,
                 resolution=target_res,
             )
-            vrt_options.update({
-                "transform": target_transform,
-                "width": target_width,
-                "height": target_height,
-            })
+            vrt_options.update(
+                {
+                    "transform": target_transform,
+                    "width": target_width,
+                    "height": target_height,
+                }
+            )
         return vrt_options
 
     @contextmanager
     def _open_reader(
         self,
         *,
-        dataset: rasterio.io.DatasetReader | None = None,
-        resampling: Resampling | None = None,
-    ) -> Iterator[rasterio.io.DatasetReader | WarpedVRT]:
+        dataset: Optional[rasterio.io.DatasetReader] = None,
+        resampling: Optional[Resampling] = None,
+    ) -> Iterator[Union[rasterio.io.DatasetReader, WarpedVRT]]:
         """Open a source dataset or warped VRT reader."""
         if dataset is not None:
             if self._vrt_options is None:
@@ -387,8 +389,8 @@ class RasterDataset:
         self,
         query: BoundingBox,
         *,
-        out_shape: tuple[int, int] | None = None,
-        resampling: Resampling | None = None,
+        out_shape: Optional[tuple[int, int]] = None,
+        resampling: Optional[Resampling] = None,
     ) -> RasterSample:
         """Read data for a geographic bounding box."""
         projected = query if query.crs == self.crs else query.to_crs(self.crs)
@@ -434,8 +436,8 @@ class RasterDataset:
         col_off: int,
         height: int,
         width: int,
-        out_shape: tuple[int, int] | None = None,
-        resampling: Resampling | None = None,
+        out_shape: Optional[tuple[int, int]] = None,
+        resampling: Optional[Resampling] = None,
     ) -> RasterSample:
         """Read data for a pixel-aligned window."""
         if row_off < 0 or col_off < 0:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -52,7 +52,7 @@ MANIFEST_REQUIRED_COLUMNS = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class QueryResult:
     """Result returned by online and offline query engines."""
 
@@ -63,18 +63,18 @@ class QueryResult:
     chip_bounds: BoundingBox
     scores: np.ndarray
     source_path: str
-    chip_id: str | None = None
-    model_type: str | None = None
+    chip_id: Optional[str] = None
+    model_type: Optional[str] = None
 
 
-@dataclass(slots=True)
+@dataclass
 class OnlineQueryCache:
     """Reusable cache for online raster queries."""
 
-    source_path: str | None = None
-    chip_bounds: BoundingBox | None = None
-    chip_grid: GeoGrid | None = None
-    encoded: EncodedImageFeatures | None = None
+    source_path: Optional[str] = None
+    chip_bounds: Optional[BoundingBox] = None
+    chip_grid: Optional[GeoGrid] = None
+    encoded: Optional[EncodedImageFeatures] = None
 
     def clear(self) -> None:
         """Reset cached online-query state."""
@@ -90,7 +90,7 @@ def _prediction_to_result(
     sample_grid: GeoGrid,
     query_bounds_value: BoundingBox,
     source_path: str,
-    chip_id: str | None,
+    chip_id: Optional[str],
     model_type: str,
 ) -> QueryResult:
     """Convert a model prediction into a public query result."""
@@ -123,7 +123,7 @@ def _require_query_crs(query: GeoQuery) -> None:
 def _normalize_point_prompt(
     coordinates: Any,
     prompt_labels: Any,
-) -> tuple[np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """Shape point prompts as a single prompted object with multiple clicks."""
     normalized_coordinates = np.asarray(coordinates, dtype=np.float32)
     normalized_labels = None
@@ -223,7 +223,7 @@ class OnlineQueryEngine:
         query: GeoQuery,
         *,
         multimask_output: bool = False,
-        cache: OnlineQueryCache | None = None,
+        cache: Optional[OnlineQueryCache] = None,
     ) -> QueryResult:
         """Run an online promptable query against the source raster."""
         _require_query_crs(query)
@@ -232,9 +232,11 @@ class OnlineQueryEngine:
         )
 
         projected_bounds = query_bounds(projected_query)
+        supports_feature_reuse = self.model_spec.resolved_supports_feature_reuse
         should_reencode = True
         if (
-            cache is not None
+            supports_feature_reuse
+            and cache is not None
             and cache.chip_bounds is not None
             and cache.chip_grid is not None
             and cache.encoded is not None
@@ -251,7 +253,7 @@ class OnlineQueryEngine:
             )
             sample = self.dataset[chip_bounds]
             chip_grid = sample.grid
-            if cache is None:
+            if cache is None or not supports_feature_reuse:
                 prediction = self._predict_from_query(
                     sample=sample,
                     chip_grid=chip_grid,
@@ -259,6 +261,8 @@ class OnlineQueryEngine:
                     multimask_output=multimask_output,
                 )
                 source_path = sample.source_path
+                if cache is not None:
+                    cache.clear()
             else:
                 encoded = self.adapter.encode_image(sample.to_model_image())
                 prompt_kwargs = _prompt_prediction_kwargs(query, chip_grid)
@@ -318,9 +322,9 @@ class FeatureCacheBuilder:
         model_spec: ModelSpec,
         output_dir: PathLike,
         *,
-        chip_size: int | tuple[int, int] | None = None,
-        stride: int | tuple[int, int] | None = None,
-        overlap: int | tuple[int, int] | None = None,
+        chip_size: Optional[Union[int, tuple[int, int]]] = None,
+        stride: Optional[Union[int, tuple[int, int]]] = None,
+        overlap: Optional[Union[int, tuple[int, int]]] = None,
     ) -> None:
         """Initialize a feature cache builder."""
         self.dataset = dataset
@@ -334,7 +338,7 @@ class FeatureCacheBuilder:
         self.stride = stride
         self.overlap = overlap
 
-    def build(self, manifest_path: PathLike | None = None) -> Path:
+    def build(self, manifest_path: Optional[PathLike] = None) -> Path:
         """Encode all chips and write a manifest."""
         if not self.model_spec.resolved_supports_feature_reuse:
             msg = "Feature cache building requires a model with feature-reuse support."
@@ -360,20 +364,22 @@ class FeatureCacheBuilder:
             chip_id = f"chip_{index:06d}"
             feature_path = self.features_dir / f"{chip_id}.pt"
             encoded.save(feature_path)
-            rows.append({
-                "feature_path": str(feature_path),
-                "chip_id": chip_id,
-                "source_path": sample.source_path,
-                "checkpoint_path": encoded.checkpoint_path,
-                "model_type": encoded.model_type,
-                "transform": json.dumps(list(sample.transform)[:6]),
-                "shape": json.dumps(list(sample.shape)),
-                "crs": sample.crs.to_string(),
-                "dst_shape": json.dumps(list(encoded.dst_shape)),
-                "chip_center_x": sample.bbox.center[0],
-                "chip_center_y": sample.bbox.center[1],
-                "geometry": sample.bbox.to_geometry(),
-            })
+            rows.append(
+                {
+                    "feature_path": str(feature_path),
+                    "chip_id": chip_id,
+                    "source_path": sample.source_path,
+                    "checkpoint_path": encoded.checkpoint_path,
+                    "model_type": encoded.model_type,
+                    "transform": json.dumps(list(sample.transform)[:6]),
+                    "shape": json.dumps(list(sample.shape)),
+                    "crs": sample.crs.to_string(),
+                    "dst_shape": json.dumps(list(encoded.dst_shape)),
+                    "chip_center_x": sample.bbox.center[0],
+                    "chip_center_y": sample.bbox.center[1],
+                    "geometry": sample.bbox.to_geometry(),
+                }
+            )
 
         manifest = gpd.GeoDataFrame(rows, geometry="geometry", crs=self.dataset.crs)
         return self.write_manifest(manifest, manifest_target)
@@ -470,9 +476,7 @@ class FeatureQueryEngine:
         """Run a promptable query against the cached feature manifest."""
         _require_query_crs(query)
         target_crs = CRS.from_user_input(self.manifest.crs)
-        projected_query = (
-            query if query.crs == target_crs else query.to_crs(target_crs)
-        )
+        projected_query = query if query.crs == target_crs else query.to_crs(target_crs)
 
         projected_bounds = query_bounds(projected_query)
 

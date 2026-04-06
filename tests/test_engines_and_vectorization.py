@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from geosam.datasets import RasterDataset
 from geosam.engines import (
     FeatureCacheBuilder,
     FeatureQueryEngine,
+    OnlineQueryCache,
     OnlineQueryEngine,
     QueryResult,
 )
@@ -26,8 +28,8 @@ from geosam.vectorization import MaskVectorizer
 class DummyAdapter:
     def __init__(self, spec: ModelSpec) -> None:
         self.spec = spec
-        self.last_predict_image_kwargs: dict[str, object] | None = None
-        self.last_predict_features_kwargs: dict[str, object] | None = None
+        self.last_predict_image_kwargs: Optional[dict[str, object]] = None
+        self.last_predict_features_kwargs: Optional[dict[str, object]] = None
 
     def encode_image(self, image: np.ndarray) -> EncodedImageFeatures:
         height, width = image.shape[:2]
@@ -53,6 +55,32 @@ class DummyAdapter:
         masks = torch.ones((1, height, width), dtype=torch.bool)
         boxes = torch.tensor([[0.0, 0.0, width, height, 0.95, 0.0]])
         return GeoSamPrediction(masks=masks, boxes=boxes)
+
+
+class NonCachingDummyAdapter(DummyAdapter):
+    def __init__(self, spec: ModelSpec) -> None:
+        super().__init__(spec)
+        self.predict_image_calls = 0
+
+    def encode_image(self, image: np.ndarray) -> EncodedImageFeatures:
+        msg = "encode_image should not be called when feature reuse is disabled."
+        raise AssertionError(msg)
+
+    def predict_image(self, image: np.ndarray, **kwargs: object) -> GeoSamPrediction:
+        self.predict_image_calls += 1
+        self.last_predict_image_kwargs = kwargs
+        height, width = image.shape[:2]
+        masks = torch.ones((1, height, width), dtype=torch.bool)
+        boxes = torch.tensor([[0.0, 0.0, width, height, 0.95, 0.0]])
+        return GeoSamPrediction(masks=masks, boxes=boxes)
+
+    def predict_features(
+        self,
+        encoded: EncodedImageFeatures,
+        **kwargs: object,
+    ) -> GeoSamPrediction:
+        msg = "predict_features should not be called when feature reuse is disabled."
+        raise AssertionError(msg)
 
 
 def _write_test_raster(path: Path) -> Path:
@@ -122,6 +150,33 @@ def test_online_query_engine_supports_composite_prompts(
     assert adapter.last_predict_image_kwargs is not None
     assert "points" in adapter.last_predict_image_kwargs
     assert "bboxes" in adapter.last_predict_image_kwargs
+
+
+def test_online_query_engine_skips_cache_for_models_without_feature_reuse(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raster_path = _write_test_raster(tmp_path / "sample.tif")
+    dataset = RasterDataset(raster_path)
+    model_spec = ModelSpec(
+        "sam3",
+        checkpoint_path="dummy.pt",
+        supports_feature_reuse=False,
+    )
+    adapter = NonCachingDummyAdapter(model_spec)
+    monkeypatch.setattr("geosam.engines.build_model_adapter", lambda _spec: adapter)
+
+    engine = OnlineQueryEngine(dataset, model_spec)
+    cache = OnlineQueryCache()
+    query = Points([[1.5, 4.5]], labels=[1], crs="EPSG:4326")
+
+    first_result = engine.query(query, cache=cache)
+    second_result = engine.query(query, cache=cache)
+
+    assert first_result.mask_array.shape == (1, 6, 6)
+    assert second_result.mask_array.shape == (1, 6, 6)
+    assert adapter.predict_image_calls == 2
+    assert cache.encoded is None
 
 
 def test_feature_cache_and_feature_query_engine(

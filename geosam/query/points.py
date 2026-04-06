@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -32,16 +32,16 @@ class Points:
     __slots__ = ["_crs", "_labels", "_values"]
 
     _values: np.ndarray
-    _labels: np.ndarray | None
-    _crs: CRS | None
+    _labels: Optional[np.ndarray]
+    _crs: Optional[CRS]
 
     def __init__(
         self,
-        points: Sequence[float | Sequence[float]] | npt.ArrayLike,
+        points: Union[Sequence[Union[float, Sequence[float]]], npt.ArrayLike],
         labels: (
-            PointPromptLabel | Sequence[PointPromptLabel] | npt.ArrayLike | None
+            Optional[Union[PointPromptLabel, Sequence[PointPromptLabel], npt.ArrayLike]]
         ) = None,
-        crs: CrsLike | None = None,
+        crs: Optional[CrsLike] = None,
         dtype: npt.DTypeLike = np.float32,
         label_dtype: npt.DTypeLike = np.int8,
     ) -> None:
@@ -75,7 +75,7 @@ class Points:
         labels = None if self.labels is None else self.labels[key]
         return Points(self._values[key, :], labels=labels, crs=self.crs)
 
-    def __contains__(self, item: Points | Sequence[float]) -> bool:
+    def __contains__(self, item: Union[Points, Sequence[float]]) -> bool:
         """Return whether the given point or points are present."""
         candidate = item.values if isinstance(item, Points) else np.asarray(item)
         if candidate.ndim == 1:
@@ -94,7 +94,7 @@ class Points:
         )
         return bool(np.all(matches))
 
-    def __array__(self, dtype: np.dtype | None = None) -> np.ndarray:
+    def __array__(self, dtype: Optional[np.dtype] = None) -> np.ndarray:
         """Return the underlying NumPy array."""
         if dtype is None:
             return self._values
@@ -130,7 +130,7 @@ class Points:
             crs=crs_new,
         )
 
-    def __sub__(self, other: Points) -> Points | None:
+    def __sub__(self, other: Points) -> Optional[Points]:
         """Subtract another point collection."""
         if not isinstance(other, Points):
             msg = f"Expected Points, got {type(other)!r}."
@@ -153,10 +153,12 @@ class Points:
 
     @staticmethod
     def _normalize_labels(
-        labels: PointPromptLabel | Sequence[PointPromptLabel] | npt.ArrayLike | None,
+        labels: Optional[
+            Union[PointPromptLabel, Sequence[PointPromptLabel], npt.ArrayLike]
+        ],
         point_count: int,
         dtype: npt.DTypeLike,
-    ) -> np.ndarray | None:
+    ) -> Optional[np.ndarray]:
         """Normalize labels to a 1D integer array."""
         if labels is None:
             return None
@@ -186,9 +188,9 @@ class Points:
 
     @staticmethod
     def _find_field(
-        frame: gpd.GeoDataFrame | pd.DataFrame,
+        frame: Union[gpd.GeoDataFrame, pd.DataFrame],
         field_names: list[str],
-    ) -> str | None:
+    ) -> Optional[str]:
         """Return the first matching field name."""
         lowered = set(field_names)
         for name in frame.columns:
@@ -199,9 +201,9 @@ class Points:
     @classmethod
     def _ensure_fields(
         cls,
-        frame: gpd.GeoDataFrame | pd.DataFrame,
-        x_field: str | None,
-        y_field: str | None,
+        frame: Union[gpd.GeoDataFrame, pd.DataFrame],
+        x_field: Optional[str],
+        y_field: Optional[str],
     ) -> tuple[str, str]:
         """Resolve x/y coordinate field names."""
         if x_field is None:
@@ -223,10 +225,10 @@ class Points:
     @classmethod
     def _resolve_labels(
         cls,
-        frame: gpd.GeoDataFrame | pd.DataFrame,
-        label_field: str | None,
-        default_label: PointPromptLabel | None,
-    ) -> np.ndarray | None:
+        frame: Union[gpd.GeoDataFrame, pd.DataFrame],
+        label_field: Optional[str],
+        default_label: Optional[PointPromptLabel],
+    ) -> Optional[np.ndarray]:
         """Resolve labels from a tabular source."""
         if label_field is None:
             label_field = cls._find_field(
@@ -245,7 +247,7 @@ class Points:
             return None
         return np.full(len(frame), default_label, dtype=np.int8)
 
-    def _ensure_shared_crs(self, other: Points) -> tuple[Points, CRS | None]:
+    def _ensure_shared_crs(self, other: Points) -> tuple[Points, Optional[CRS]]:
         """Convert another points object into the current CRS when needed."""
         if self.crs == other.crs:
             return other, self.crs
@@ -275,7 +277,7 @@ class Points:
         return self._values[:, 1]
 
     @property
-    def labels(self) -> np.ndarray | None:
+    def labels(self) -> Optional[np.ndarray]:
         """Return prompt labels."""
         return self._labels
 
@@ -290,7 +292,7 @@ class Points:
         return self._values.dtype
 
     @property
-    def crs(self) -> CRS | None:
+    def crs(self) -> Optional[CRS]:
         """Return the CRS."""
         return self._crs
 
@@ -344,12 +346,12 @@ class Points:
     @classmethod
     def from_dataframe(
         cls,
-        frame: gpd.GeoDataFrame | pd.DataFrame,
-        x_field: str | None = None,
-        y_field: str | None = None,
-        label_field: str | None = None,
-        default_label: PointPromptLabel | None = None,
-        crs: CrsLike | None = None,
+        frame: Union[gpd.GeoDataFrame, pd.DataFrame],
+        x_field: Optional[str] = None,
+        y_field: Optional[str] = None,
+        label_field: Optional[str] = None,
+        default_label: Optional[PointPromptLabel] = None,
+        crs: Optional[CrsLike] = None,
     ) -> Points:
         """Build points from a DataFrame or GeoDataFrame."""
         if isinstance(frame, gpd.GeoDataFrame) and frame.geometry is not None:
@@ -369,8 +371,8 @@ class Points:
     def from_file(
         cls,
         filename: PathLike,
-        label_field: str | None = None,
-        default_label: PointPromptLabel | None = None,
+        label_field: Optional[str] = None,
+        default_label: Optional[PointPromptLabel] = None,
         **kwargs: object,
     ) -> Points:
         """Build points from a vector file."""
@@ -386,11 +388,11 @@ class Points:
     def from_csv(
         cls,
         filename: PathLike,
-        x_field: str | None = None,
-        y_field: str | None = None,
-        label_field: str | None = None,
-        default_label: PointPromptLabel | None = None,
-        crs: CrsLike | None = None,
+        x_field: Optional[str] = None,
+        y_field: Optional[str] = None,
+        label_field: Optional[str] = None,
+        default_label: Optional[PointPromptLabel] = None,
+        crs: Optional[CrsLike] = None,
         **kwargs: object,
     ) -> Points:
         """Build points from a CSV-like table."""

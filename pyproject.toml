@@ -47,6 +47,7 @@ exclude = ["tests*", "docs*", "examples*", "outputs*"]
 [tool.ruff]
 line-length = 88
 fix = true
+target-version = "py39"
 exclude = [
     # commonly ignored directories.
     ".bzr",
@@ -205,6 +206,9 @@ ignore = [
     "PD011",
     # super-call-with-parameters (UP008)
     "UP008",
+    # keep Python 3.9-compatible Union/Optional syntax
+    "UP007",
+    "UP045",
     # missing-trailing-comma (COM812)
     "COM812",
     # private-member-access (SLF001)#
