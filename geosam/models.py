@@ -276,6 +276,10 @@ class UltralyticsSamAdapter:
         self.spec = spec
         self.model = SAM(self.spec.resolved_checkpoint_path)
         self._query_predictor: Predictor | None = None
+        self._query_feature_payload: EncodedFeaturePayload | None = None
+        self._query_feature_signature: (
+            tuple[str, str, tuple[int, int], tuple[int, int], int] | None
+        ) = None
 
     def _predictor_overrides(self) -> dict[str, Any]:
         """Build predictor overrides for Ultralytics."""
@@ -336,13 +340,96 @@ class UltralyticsSamAdapter:
                 empty_cache()
 
     @classmethod
-    def _release_predictor(cls, predictor: Predictor | None) -> None:
-        """Release a transient predictor and clear runtime memory."""
+    def _release_predictor(
+        cls,
+        predictor: Predictor | None,
+        *,
+        flush_memory: bool = False,
+    ) -> None:
+        """Release a predictor and optionally flush allocator memory.
+
+        Parameters
+        ----------
+        predictor : Predictor | None
+            Predictor instance to release.
+        flush_memory : bool, default=False
+            Whether to force Python and accelerator cache cleanup after
+            clearing predictor state.
+
+        """
         if predictor is None:
             return
         cls._clear_predictor_runtime_state(predictor)
         del predictor
-        cls._flush_runtime_memory()
+        if flush_memory:
+            cls._flush_runtime_memory()
+
+    @staticmethod
+    def _feature_payload_signature(
+        encoded: EncodedImageFeatures,
+    ) -> tuple[str, str, tuple[int, int], tuple[int, int], int]:
+        """Build a cache key for the active query feature payload.
+
+        Parameters
+        ----------
+        encoded : EncodedImageFeatures
+            Encoded feature payload to identify.
+
+        Returns
+        -------
+        tuple[str, str, tuple[int, int], tuple[int, int], int]
+            Signature for the currently active encoded chip. The final
+            component uses object identity so only the active in-memory chip is
+            treated as a hot cache entry.
+
+        """
+        return (
+            encoded.model_type,
+            encoded.checkpoint_path,
+            encoded.src_shape,
+            encoded.dst_shape,
+            id(encoded.features),
+        )
+
+    def _clear_query_feature_cache(self) -> None:
+        """Clear the device-side feature cache used by the query predictor."""
+        self._query_feature_payload = None
+        self._query_feature_signature = None
+        gc.collect()
+
+    def _query_feature_payload_for(
+        self,
+        encoded: EncodedImageFeatures,
+        predictor: Predictor,
+    ) -> EncodedFeaturePayload:
+        """Return a device-ready feature payload for the active query chip.
+
+        Parameters
+        ----------
+        encoded : EncodedImageFeatures
+            Encoded chip features stored in the cold cache.
+        predictor : Predictor
+            Persistent predictor used for prompt queries.
+
+        Returns
+        -------
+        EncodedFeaturePayload
+            Feature payload cloned onto the predictor device. The last active
+            chip is retained as a device-side hot cache to speed up iterative
+            prompt updates on the same image chip.
+
+        """
+        feature_signature = self._feature_payload_signature(encoded)
+        if (
+            self._query_feature_payload is None
+            or self._query_feature_signature != feature_signature
+        ):
+            self._query_feature_payload = _clone_feature_payload(
+                encoded.features,
+                device=predictor.device,
+            )
+            self._query_feature_signature = feature_signature
+        return self._query_feature_payload
 
     def _ensure_feature_reuse_supported(self) -> None:
         """Validate feature-reuse support for the adapter."""
@@ -478,24 +565,18 @@ class UltralyticsSamAdapter:
             raise ValueError(msg)
 
         predictor = self._ensure_query_predictor()
-        try:
-            predictor_features = _clone_feature_payload(
-                encoded.features,
-                device=predictor.device,
-            )
-            pred_masks, pred_boxes = predictor.inference_features(
-                features=predictor_features,
-                src_shape=encoded.src_shape,
-                dst_shape=dst_shape or encoded.dst_shape,
-                bboxes=bboxes,
-                points=normalized_points,
-                labels=normalized_labels,
-                masks=masks,
-                multimask_output=multimask_output,
-            )
-            return GeoSamPrediction(masks=pred_masks, boxes=pred_boxes)
-        finally:
-            self._release_predictor(predictor)
+        predictor_features = self._query_feature_payload_for(encoded, predictor)
+        pred_masks, pred_boxes = predictor.inference_features(
+            features=predictor_features,
+            src_shape=encoded.src_shape,
+            dst_shape=dst_shape or encoded.dst_shape,
+            bboxes=bboxes,
+            points=normalized_points,
+            labels=normalized_labels,
+            masks=masks,
+            multimask_output=multimask_output,
+        )
+        return GeoSamPrediction(masks=pred_masks, boxes=pred_boxes)
 
     def encode_image(self, image: ImageSource) -> EncodedImageFeatures:
         """Encode an image into reusable SAM features."""
@@ -546,7 +627,8 @@ class UltralyticsSamAdapter:
 
     def close(self) -> None:
         """Release runtime resources held by the adapter."""
-        self._release_predictor(self._query_predictor)
+        self._clear_query_feature_cache()
+        self._release_predictor(self._query_predictor, flush_memory=True)
         self._query_predictor = None
         if hasattr(self.model, "predictor"):
             self.model.predictor = None
