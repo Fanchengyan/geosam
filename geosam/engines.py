@@ -218,6 +218,11 @@ class OnlineQueryEngine:
         self.model_spec = model_spec
         self.adapter = build_model_adapter(model_spec)
 
+    def close(self) -> None:
+        """Release runtime resources held by the online query engine."""
+        self.adapter.close()
+        self.dataset = None
+
     def query(
         self,
         query: GeoQuery,
@@ -416,6 +421,10 @@ class FeatureQueryEngine:
             msg = f"Manifest is missing required columns: {sorted(missing_columns)}"
             logger.error(msg)
             raise ValueError(msg)
+
+    def close(self) -> None:
+        """Release runtime resources held by the feature-query engine."""
+        self.adapter.close()
 
     @staticmethod
     def load_manifest(manifest_path: Path) -> gpd.GeoDataFrame:

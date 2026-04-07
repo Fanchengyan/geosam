@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, TypedDict, Union
@@ -263,6 +264,9 @@ class GeoSamModelAdapter(Protocol):
     ) -> GeoSamPrediction:
         """Run prompt-based prediction from cached features."""
 
+    def close(self) -> None:
+        """Release runtime resources held by the adapter."""
+
 
 class UltralyticsSamAdapter:
     """Ultralytics-backed adapter for SAM-family models."""
@@ -271,6 +275,7 @@ class UltralyticsSamAdapter:
         """Initialize an Ultralytics SAM adapter."""
         self.spec = spec
         self.model = SAM(self.spec.resolved_checkpoint_path)
+        self._query_predictor: Predictor | None = None
 
     def _predictor_overrides(self) -> dict[str, Any]:
         """Build predictor overrides for Ultralytics."""
@@ -284,17 +289,60 @@ class UltralyticsSamAdapter:
             overrides["device"] = str(self.spec.device)
         return overrides
 
-    def _ensure_predictor(self) -> Predictor:
-        """Create and configure the underlying Ultralytics predictor."""
-        if self.model.predictor is None:
-            predictor_class = self.model.task_map["segment"]["predictor"]
-            predictor = predictor_class(
-                overrides=self._predictor_overrides(),
-                _callbacks=self.model.callbacks,
-            )
-            predictor.setup_model(model=self.model.model, verbose=False)
-            self.model.predictor = predictor
-        return self.model.predictor
+    def _build_predictor(self) -> Predictor:
+        """Build a fresh Ultralytics predictor bound to the loaded model."""
+        predictor_class = self.model.task_map["segment"]["predictor"]
+        predictor = predictor_class(
+            overrides=self._predictor_overrides(),
+            _callbacks=self.model.callbacks,
+        )
+        predictor.setup_model(model=self.model.model, verbose=False)
+        return predictor
+
+    def _ensure_query_predictor(self) -> Predictor:
+        """Create and configure the persistent query predictor."""
+        if self._query_predictor is None:
+            self._query_predictor = self._build_predictor()
+        return self._query_predictor
+
+    @staticmethod
+    def _clear_predictor_runtime_state(predictor: Predictor) -> None:
+        """Clear transient state retained by an Ultralytics predictor."""
+        for attribute_name, empty_value in (
+            ("features", None),
+            ("im", None),
+            ("dataset", None),
+            ("source_type", None),
+            ("batch", None),
+            ("results", None),
+            ("txt_path", None),
+            ("plotted_img", None),
+            ("prompts", {}),
+            ("vid_writer", {}),
+        ):
+            if hasattr(predictor, attribute_name):
+                setattr(predictor, attribute_name, empty_value)
+
+    @staticmethod
+    def _flush_runtime_memory() -> None:
+        """Best-effort cleanup for Python and accelerator memory."""
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        if hasattr(torch, "mps") and torch.backends.mps.is_available():
+            empty_cache = getattr(torch.mps, "empty_cache", None)
+            if callable(empty_cache):
+                empty_cache()
+
+    @classmethod
+    def _release_predictor(cls, predictor: Predictor | None) -> None:
+        """Release a transient predictor and clear runtime memory."""
+        if predictor is None:
+            return
+        cls._clear_predictor_runtime_state(predictor)
+        del predictor
+        cls._flush_runtime_memory()
 
     def _ensure_feature_reuse_supported(self) -> None:
         """Validate feature-reuse support for the adapter."""
@@ -381,24 +429,26 @@ class UltralyticsSamAdapter:
         """Encode an image into an ``EncodedImageFeatures`` payload."""
         if require_feature_reuse:
             self._ensure_feature_reuse_supported()
+        predictor = self._build_predictor()
+        try:
+            predictor.set_image(str(image) if isinstance(image, Path) else image)
+            if predictor.features is None:
+                msg = f"Feature extraction failed for image source {image!r}."
+                logger.error(msg)
+                raise RuntimeError(msg)
 
-        predictor = self._ensure_predictor()
-        predictor.set_image(str(image) if isinstance(image, Path) else image)
-        if predictor.features is None:
-            msg = f"Feature extraction failed for image source {image!r}."
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-        return EncodedImageFeatures(
-            model_type=self.spec.model_type,
-            checkpoint_path=self.spec.resolved_checkpoint_path,
-            src_shape=self._source_shape_from_image(image),
-            dst_shape=_normalize_shape(predictor.args.imgsz),
-            features=_clone_feature_payload(
-                predictor.features,
-                device=output_device,
-            ),
-        )
+            return EncodedImageFeatures(
+                model_type=self.spec.model_type,
+                checkpoint_path=self.spec.resolved_checkpoint_path,
+                src_shape=self._source_shape_from_image(image),
+                dst_shape=_normalize_shape(predictor.args.imgsz),
+                features=_clone_feature_payload(
+                    predictor.features,
+                    device=output_device,
+                ),
+            )
+        finally:
+            self._release_predictor(predictor)
 
     def _predict_from_encoded_features(
         self,
@@ -427,22 +477,25 @@ class UltralyticsSamAdapter:
             logger.error(msg)
             raise ValueError(msg)
 
-        predictor = self._ensure_predictor()
-        predictor_features = _clone_feature_payload(
-            encoded.features,
-            device=predictor.device,
-        )
-        pred_masks, pred_boxes = predictor.inference_features(
-            features=predictor_features,
-            src_shape=encoded.src_shape,
-            dst_shape=dst_shape or encoded.dst_shape,
-            bboxes=bboxes,
-            points=normalized_points,
-            labels=normalized_labels,
-            masks=masks,
-            multimask_output=multimask_output,
-        )
-        return GeoSamPrediction(masks=pred_masks, boxes=pred_boxes)
+        predictor = self._ensure_query_predictor()
+        try:
+            predictor_features = _clone_feature_payload(
+                encoded.features,
+                device=predictor.device,
+            )
+            pred_masks, pred_boxes = predictor.inference_features(
+                features=predictor_features,
+                src_shape=encoded.src_shape,
+                dst_shape=dst_shape or encoded.dst_shape,
+                bboxes=bboxes,
+                points=normalized_points,
+                labels=normalized_labels,
+                masks=masks,
+                multimask_output=multimask_output,
+            )
+            return GeoSamPrediction(masks=pred_masks, boxes=pred_boxes)
+        finally:
+            self._release_predictor(predictor)
 
     def encode_image(self, image: ImageSource) -> EncodedImageFeatures:
         """Encode an image into reusable SAM features."""
@@ -490,6 +543,15 @@ class UltralyticsSamAdapter:
             masks=masks,
             multimask_output=multimask_output,
         )
+
+    def close(self) -> None:
+        """Release runtime resources held by the adapter."""
+        self._release_predictor(self._query_predictor)
+        self._query_predictor = None
+        if hasattr(self.model, "predictor"):
+            self.model.predictor = None
+        self.model = None
+        self._flush_runtime_memory()
 
 
 class Sam3ModelAdapter(UltralyticsSamAdapter):
