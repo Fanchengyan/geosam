@@ -11,7 +11,6 @@ from importlib import import_module
 from typing import Any
 
 _LAZY_EXPORTS = {
-    "DEFAULT_MODEL_REPOSITORY": "geosam.runtime",
     "MODEL_DEFINITIONS": "geosam.runtime",
     "BoundingBox": "geosam.query",
     "EncodedImageFeatures": "geosam.models",
@@ -53,7 +52,6 @@ _LAZY_EXPORTS = {
 }
 
 __all__ = [
-    "DEFAULT_MODEL_REPOSITORY",
     "MODEL_DEFINITIONS",
     "BoundingBox",
     "EncodedImageFeatures",

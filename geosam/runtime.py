@@ -23,8 +23,6 @@ from geosam.query.prompts import normalize_chip_size
 
 logger = setup_logger(__name__)
 
-DEFAULT_MODEL_REPOSITORY = "https://github.com/Fanchengyan/geosam-models"
-
 
 @dataclass(frozen=True)
 class ModelDefinition:
