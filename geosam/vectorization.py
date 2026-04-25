@@ -9,12 +9,14 @@ from typing import TYPE_CHECKING, Any, Optional
 import geopandas as gpd
 import numpy as np
 from rasterio.features import shapes
+from shapely.geometry import mapping
 from shapely.geometry import shape as shapely_shape
 
 from geosam.logging import setup_logger
 
 if TYPE_CHECKING:
     from rasterio import Affine
+    from shapely.geometry.base import BaseGeometry
 
     from geosam.engines import QueryResult
     from geosam.typing import CrsLike, PathLike
@@ -93,6 +95,8 @@ class MaskVectorizer:
         *,
         mask_index: int = 0,
         properties: Optional[dict[str, Any]] = None,
+        simplify_tolerance: float | None = None,
+        preserve_topology: bool = True,
     ) -> gpd.GeoDataFrame:
         """Convert the bound mask array into polygon features.
 
@@ -102,6 +106,10 @@ class MaskVectorizer:
             Index of the mask to export when multiple masks are available.
         properties : dict[str, Any] | None, optional
             Additional properties to merge with the bound default properties.
+        simplify_tolerance : float | None, optional
+            Optional tolerance passed to Shapely ``simplify`` before export.
+        preserve_topology : bool, default=True
+            Whether topology should be preserved during simplification.
 
         Returns
         -------
@@ -118,6 +126,54 @@ class MaskVectorizer:
             crs=self.crs,
             mask_index=mask_index,
             properties=merged_properties,
+            simplify_tolerance=simplify_tolerance,
+            preserve_topology=preserve_topology,
+        )
+
+    def to_geometries(
+        self,
+        *,
+        mask_index: int = 0,
+        simplify_tolerance: float | None = None,
+        preserve_topology: bool = True,
+    ) -> list[BaseGeometry]:
+        """Convert the bound mask array into Shapely geometries.
+
+        Parameters
+        ----------
+        mask_index : int, optional
+            Index of the mask to export when multiple masks are available.
+        simplify_tolerance : float | None, optional
+            Optional tolerance passed to Shapely ``simplify`` before export.
+        preserve_topology : bool, default=True
+            Whether topology should be preserved during simplification.
+
+        Returns
+        -------
+        list[BaseGeometry]
+            Polygonized mask geometries.
+
+        """
+        return _vectorize_mask_geometries(
+            self.mask_array,
+            transform=self.transform,
+            mask_index=mask_index,
+            simplify_tolerance=simplify_tolerance,
+            preserve_topology=preserve_topology,
+        )
+
+    def to_preview_geometries(
+        self,
+        *,
+        mask_index: int = 0,
+        simplify_tolerance: float | None = None,
+        preserve_topology: bool = True,
+    ) -> list[BaseGeometry]:
+        """Return geometries optimized for interactive preview rendering."""
+        return self.to_geometries(
+            mask_index=mask_index,
+            simplify_tolerance=simplify_tolerance,
+            preserve_topology=preserve_topology,
         )
 
     def to_geojson(
@@ -125,13 +181,28 @@ class MaskVectorizer:
         *,
         mask_index: int = 0,
         properties: Optional[dict[str, Any]] = None,
+        simplify_tolerance: float | None = None,
+        preserve_topology: bool = True,
     ) -> dict[str, Any]:
         """Convert the bound mask result to a GeoJSON dictionary."""
-        frame = self.to_geodataframe(
-            mask_index=mask_index,
-            properties=properties,
-        )
-        return json.loads(frame.to_json())
+        merged_properties = dict(self.properties)
+        if properties is not None:
+            merged_properties.update(properties)
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": dict(merged_properties),
+                    "geometry": mapping(geometry),
+                }
+                for geometry in self.to_geometries(
+                    mask_index=mask_index,
+                    simplify_tolerance=simplify_tolerance,
+                    preserve_topology=preserve_topology,
+                )
+            ],
+        }
 
     def write_geojson(
         self,
@@ -139,11 +210,15 @@ class MaskVectorizer:
         *,
         mask_index: int = 0,
         properties: Optional[dict[str, Any]] = None,
+        simplify_tolerance: float | None = None,
+        preserve_topology: bool = True,
     ) -> Path:
         """Write the bound mask result to a GeoJSON file."""
         payload = self.to_geojson(
             mask_index=mask_index,
             properties=properties,
+            simplify_tolerance=simplify_tolerance,
+            preserve_topology=preserve_topology,
         )
         target_path = Path(output_path).expanduser().resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +275,8 @@ def _vectorize_mask(
     crs: CrsLike,
     mask_index: int = 0,
     properties: Optional[dict[str, Any]] = None,
+    simplify_tolerance: float | None = None,
+    preserve_topology: bool = True,
 ) -> gpd.GeoDataFrame:
     """Convert a mask array into polygon features.
 
@@ -216,6 +293,10 @@ def _vectorize_mask(
         Index of the mask to export when multiple masks are available.
     properties : dict[str, Any] | None, optional
         Properties attached to each exported feature.
+    simplify_tolerance : float | None, optional
+        Optional tolerance passed to Shapely ``simplify`` before export.
+    preserve_topology : bool, default=True
+        Whether topology should be preserved during simplification.
 
     Returns
     -------
@@ -223,17 +304,15 @@ def _vectorize_mask(
         Polygonized mask features.
 
     """
-    mask = _select_mask(mask_array, mask_index=mask_index)
-    records: list[dict[str, Any]] = []
-    base_properties = properties or {}
-    for geometry, value in shapes(
-        mask.astype(np.uint8),
-        mask=mask,
+    geometries = _vectorize_mask_geometries(
+        mask_array,
         transform=transform,
-    ):
-        if int(value) != 1:
-            continue
-        records.append({**base_properties, "geometry": shapely_shape(geometry)})
+        mask_index=mask_index,
+        simplify_tolerance=simplify_tolerance,
+        preserve_topology=preserve_topology,
+    )
+    base_properties = properties or {}
+    records = [{**base_properties, "geometry": geometry} for geometry in geometries]
 
     if len(records) == 0:
         return gpd.GeoDataFrame(
@@ -242,3 +321,33 @@ def _vectorize_mask(
             crs=crs,
         )
     return gpd.GeoDataFrame(records, geometry="geometry", crs=crs)
+
+
+def _vectorize_mask_geometries(
+    mask_array: np.ndarray,
+    *,
+    transform: Affine,
+    mask_index: int = 0,
+    simplify_tolerance: float | None = None,
+    preserve_topology: bool = True,
+) -> list[BaseGeometry]:
+    """Convert a mask array into Shapely geometries."""
+    mask = _select_mask(mask_array, mask_index=mask_index)
+    geometries: list[BaseGeometry] = []
+    for geometry, value in shapes(
+        mask.astype(np.uint8),
+        mask=mask,
+        transform=transform,
+    ):
+        if int(value) != 1:
+            continue
+        polygon = shapely_shape(geometry)
+        if simplify_tolerance is not None and simplify_tolerance > 0:
+            polygon = polygon.simplify(
+                simplify_tolerance,
+                preserve_topology=preserve_topology,
+            )
+        if polygon.is_empty:
+            continue
+        geometries.append(polygon)
+    return geometries
