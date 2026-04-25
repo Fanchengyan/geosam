@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import geopandas as gpd
 import numpy as np
-from pyproj.crs import CRS
 from rasterio import Affine
-from shapely.geometry import MultiPoint, box
+from shapely.geometry import MultiPoint, Point, box
 
+from geosam.context import get_runtime
+from geosam.crs import crs_equal, crs_to_string, normalize_crs
 from geosam.datasets import GeoGrid, GridGeoSampler, RasterDataset
 from geosam.logging import setup_logger
 from geosam.models import EncodedImageFeatures, ModelSpec, build_model_adapter
@@ -58,7 +59,7 @@ class QueryResult:
 
     mask_array: np.ndarray
     mask_transform: Affine
-    mask_crs: CRS
+    mask_crs: Any
     query_bounds: BoundingBox
     chip_bounds: BoundingBox
     scores: np.ndarray
@@ -173,25 +174,25 @@ def _prompt_prediction_kwargs(
     return {"bboxes": [list(bbox_prompt)]}
 
 
-def _query_geometry(query: GeoQuery, target_crs: CRS) -> BaseGeometry:
+def _query_geometry(query: GeoQuery, target_crs: Any) -> BaseGeometry:
     """Convert a query to a geometry in the target CRS."""
     if isinstance(query, PromptSet):
         geometries: list[BaseGeometry] = []
         if query.bbox is not None:
             bounds = (
                 query.bbox
-                if query.bbox.crs == target_crs
+                if crs_equal(query.bbox.crs, target_crs)
                 else query.bbox.to_crs(target_crs)
             )
             geometries.append(box(*bounds.to_tuple()))
         if query.points is not None:
             projected_points = (
                 query.points
-                if query.points.crs == target_crs
+                if crs_equal(query.points.crs, target_crs)
                 else query.points.to_crs(target_crs)
             )
             if len(projected_points) == 1:
-                geometries.append(projected_points.to_geodataframe().geometry.iloc[0])
+                geometries.append(Point(projected_points.values[0].tolist()))
             else:
                 geometries.append(
                     MultiPoint(projected_points.values.tolist()).convex_hull
@@ -201,11 +202,11 @@ def _query_geometry(query: GeoQuery, target_crs: CRS) -> BaseGeometry:
         return geometries[0].union(geometries[1])
 
     if isinstance(query, BoundingBox):
-        bounds = query if query.crs == target_crs else query.to_crs(target_crs)
+        bounds = query if crs_equal(query.crs, target_crs) else query.to_crs(target_crs)
         return box(*bounds.to_tuple())
-    projected = query if query.crs == target_crs else query.to_crs(target_crs)
+    projected = query if crs_equal(query.crs, target_crs) else query.to_crs(target_crs)
     if len(projected) == 1:
-        return projected.to_geodataframe().geometry.iloc[0]
+        return Point(projected.values[0].tolist())
     return MultiPoint(projected.values.tolist())
 
 
@@ -233,7 +234,9 @@ class OnlineQueryEngine:
         """Run an online promptable query against the source raster."""
         _require_query_crs(query)
         projected_query = (
-            query if query.crs == self.dataset.crs else query.to_crs(self.dataset.crs)
+            query
+            if crs_equal(query.crs, self.dataset.crs)
+            else query.to_crs(self.dataset.crs)
         )
 
         projected_bounds = query_bounds(projected_query)
@@ -363,7 +366,13 @@ class FeatureCacheBuilder:
             overlap=self.overlap,
         )
         rows: list[dict[str, Any]] = []
+        chip_count = len(sampler)
         for index, chip_bounds in enumerate(sampler):
+            runtime = get_runtime()
+            if runtime.progress is not None and runtime.progress.is_canceled():
+                msg = "Feature cache building was canceled."
+                logger.warning(msg)
+                raise InterruptedError(msg)
             sample = self.dataset[chip_bounds]
             encoded = self.adapter.encode_image(sample.to_model_image())
             chip_id = f"chip_{index:06d}"
@@ -378,15 +387,22 @@ class FeatureCacheBuilder:
                     "model_type": encoded.model_type,
                     "transform": json.dumps(list(sample.transform)[:6]),
                     "shape": json.dumps(list(sample.shape)),
-                    "crs": sample.crs.to_string(),
+                    "crs": crs_to_string(sample.crs),
                     "dst_shape": json.dumps(list(encoded.dst_shape)),
                     "chip_center_x": sample.bbox.center[0],
                     "chip_center_y": sample.bbox.center[1],
                     "geometry": sample.bbox.to_geometry(),
                 }
             )
+            if runtime.progress is not None:
+                runtime.progress.set_progress(((index + 1) / chip_count) * 100.0)
+                runtime.progress.push_info(f"Encoded {chip_id}.")
 
-        manifest = gpd.GeoDataFrame(rows, geometry="geometry", crs=self.dataset.crs)
+        manifest = gpd.GeoDataFrame(
+            rows,
+            geometry="geometry",
+            crs=crs_to_string(self.dataset.crs),
+        )
         return self.write_manifest(manifest, manifest_target)
 
     def write_manifest(
@@ -484,8 +500,10 @@ class FeatureQueryEngine:
     ) -> QueryResult:
         """Run a promptable query against the cached feature manifest."""
         _require_query_crs(query)
-        target_crs = CRS.from_user_input(self.manifest.crs)
-        projected_query = query if query.crs == target_crs else query.to_crs(target_crs)
+        target_crs = normalize_crs(self.manifest.crs)
+        projected_query = (
+            query if crs_equal(query.crs, target_crs) else query.to_crs(target_crs)
+        )
 
         projected_bounds = query_bounds(projected_query)
 
@@ -547,5 +565,5 @@ class FeatureQueryEngine:
         """Reconstruct a chip GeoGrid from a manifest row."""
         transform_values = json.loads(row["transform"])
         shape = tuple(json.loads(row["shape"]))
-        crs = CRS.from_user_input(row["crs"])
+        crs = normalize_crs(row["crs"])
         return GeoGrid(Affine(*transform_values), shape, crs)

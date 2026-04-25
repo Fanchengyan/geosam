@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
-import geopandas as gpd
 import numpy as np
-import pandas as pd
-from pyproj import Transformer
-from pyproj.crs import CRS
 
+from geosam.crs import crs_equal, crs_to_string, normalize_crs, transform_points
 from geosam.logging import setup_logger
 from geosam.query.bbox import BoundingBox
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
+    import geopandas as gpd
     import numpy.typing as npt
+    import pandas as pd
 
     from geosam.typing import CrsLike, PathLike
 
@@ -33,7 +32,7 @@ class Points:
 
     _values: np.ndarray
     _labels: Optional[np.ndarray]
-    _crs: Optional[CRS]
+    _crs: Any | None
 
     def __init__(
         self,
@@ -60,7 +59,7 @@ class Points:
             point_count=len(values),
             dtype=label_dtype,
         )
-        self._crs = CRS.from_user_input(crs) if crs is not None else None
+        self._crs = normalize_crs(crs) if crs is not None else None
 
     def __len__(self) -> int:
         """Return the number of points."""
@@ -247,9 +246,13 @@ class Points:
             return None
         return np.full(len(frame), default_label, dtype=np.int8)
 
-    def _ensure_shared_crs(self, other: Points) -> tuple[Points, Optional[CRS]]:
+    def _ensure_shared_crs(self, other: Points) -> tuple[Points, Any | None]:
         """Convert another points object into the current CRS when needed."""
-        if self.crs == other.crs:
+        if self.crs == other.crs or (
+            self.crs is not None
+            and other.crs is not None
+            and crs_equal(self.crs, other.crs)
+        ):
             return other, self.crs
 
         if self.crs is None or other.crs is None:
@@ -292,7 +295,7 @@ class Points:
         return self._values.dtype
 
     @property
-    def crs(self) -> Optional[CRS]:
+    def crs(self) -> Any | None:
         """Return the CRS."""
         return self._crs
 
@@ -314,7 +317,7 @@ class Points:
 
     def set_crs(self, crs: CrsLike) -> None:
         """Assign a CRS without reprojection."""
-        self._crs = CRS.from_user_input(crs)
+        self._crs = normalize_crs(crs)
 
     def to_crs(self, crs: CrsLike) -> Points:
         """Reproject point coordinates."""
@@ -323,12 +326,11 @@ class Points:
             logger.error(msg)
             raise ValueError(msg)
 
-        target_crs = CRS.from_user_input(crs)
-        if self.crs == target_crs:
+        target_crs = normalize_crs(crs)
+        if crs_equal(self.crs, target_crs):
             return self
 
-        transformer = Transformer.from_crs(self.crs, target_crs, always_xy=True)
-        x, y = transformer.transform(self.x, self.y)
+        x, y = transform_points(self.x, self.y, self.crs, target_crs)
         return Points(np.column_stack([x, y]), labels=self.labels, crs=target_crs)
 
     def to_prompt(self) -> tuple[list[list[float]], list[int]]:
@@ -354,6 +356,8 @@ class Points:
         crs: Optional[CrsLike] = None,
     ) -> Points:
         """Build points from a DataFrame or GeoDataFrame."""
+        import geopandas as gpd
+
         if isinstance(frame, gpd.GeoDataFrame) and frame.geometry is not None:
             points = np.column_stack(
                 [frame.geometry.x.to_numpy(), frame.geometry.y.to_numpy()]
@@ -376,6 +380,8 @@ class Points:
         **kwargs: object,
     ) -> Points:
         """Build points from a vector file."""
+        import geopandas as gpd
+
         frame = gpd.read_file(filename, **kwargs)
         exploded = frame.explode(index_parts=False, ignore_index=True)
         labels = cls._resolve_labels(exploded, label_field, default_label)
@@ -396,6 +402,8 @@ class Points:
         **kwargs: object,
     ) -> Points:
         """Build points from a CSV-like table."""
+        import pandas as pd
+
         frame = pd.read_csv(filename, **kwargs)
         return cls.from_dataframe(
             frame,
@@ -408,6 +416,8 @@ class Points:
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert the points to a DataFrame."""
+        import pandas as pd
+
         frame = pd.DataFrame(self.values, columns=["x", "y"])
         if self.labels is not None:
             frame["labels"] = self.labels
@@ -415,9 +425,12 @@ class Points:
 
     def to_geodataframe(self) -> gpd.GeoDataFrame:
         """Convert the points to a GeoDataFrame."""
+        import geopandas as gpd
+
         frame = self.to_dataframe()
         geometry = gpd.points_from_xy(frame["x"], frame["y"])
-        return gpd.GeoDataFrame(frame, geometry=geometry, crs=self.crs)
+        crs = None if self.crs is None else crs_to_string(self.crs)
+        return gpd.GeoDataFrame(frame, geometry=geometry, crs=crs)
 
     def to_file(self, filename: PathLike, **kwargs: object) -> None:
         """Write the points to a vector file."""

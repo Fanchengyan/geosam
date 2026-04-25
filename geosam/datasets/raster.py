@@ -6,11 +6,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from os import fspath
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
 import rasterio
-from pyproj.crs import CRS
 from rasterio import Affine
 from rasterio.enums import Resampling
 from rasterio.transform import array_bounds
@@ -19,6 +18,7 @@ from rasterio.warp import calculate_default_transform
 from rasterio.windows import Window, from_bounds
 from rasterio.windows import transform as window_transform
 
+from geosam.crs import crs_equal, crs_to_string, normalize_crs
 from geosam.datasets.geogrid import GeoGrid
 from geosam.logging import setup_logger
 from geosam.query import BoundingBox
@@ -81,7 +81,7 @@ class RasterSample:
 
     image: np.ndarray
     bbox: BoundingBox
-    crs: CRS
+    crs: Any
     transform: Affine
     shape: tuple[int, int]
     source_path: str
@@ -319,20 +319,20 @@ class RasterDataset:
         res: Optional[Union[float, tuple[float, float]]],
     ) -> Optional[dict[str, object]]:
         """Build WarpedVRT options for output reprojection and resampling."""
-        target_crs = dataset.crs if crs is None else CRS.from_user_input(crs)
+        target_crs = dataset.crs if crs is None else normalize_crs(crs)
         target_res = self._normalize_res(res)
-        needs_vrt = target_crs != dataset.crs or target_res is not None
+        needs_vrt = not crs_equal(target_crs, dataset.crs) or target_res is not None
         if not needs_vrt:
             return None
 
         vrt_options: dict[str, object] = {
-            "crs": target_crs,
+            "crs": crs_to_string(target_crs),
             "resampling": self.resampling,
         }
         if target_res is not None:
             target_transform, target_width, target_height = calculate_default_transform(
                 dataset.crs,
-                target_crs,
+                crs_to_string(target_crs),
                 dataset.width,
                 dataset.height,
                 *dataset.bounds,
@@ -393,7 +393,7 @@ class RasterDataset:
         resampling: Optional[Resampling] = None,
     ) -> RasterSample:
         """Read data for a geographic bounding box."""
-        projected = query if query.crs == self.crs else query.to_crs(self.crs)
+        projected = query if crs_equal(query.crs, self.crs) else query.to_crs(self.crs)
         clipped = projected & self.bounds
         if clipped is None:
             msg = "Requested bounding box does not intersect the raster extent."

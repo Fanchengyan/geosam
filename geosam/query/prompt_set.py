@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional
 
+from geosam.crs import crs_equal
 from geosam.logging import setup_logger
 from geosam.query.bbox import BoundingBox
 from geosam.query.points import Points
@@ -12,7 +13,7 @@ from geosam.query.points import Points
 logger = setup_logger(__name__)
 
 if TYPE_CHECKING:
-    from pyproj.crs import CRS
+    from geosam.typing import CrsLike
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ class PromptSet:
             elif (
                 normalized_points.crs is not None
                 and normalized_bbox.crs is not None
-                and normalized_points.crs != normalized_bbox.crs
+                and not crs_equal(normalized_points.crs, normalized_bbox.crs)
             ):
                 normalized_bbox = normalized_bbox.to_crs(normalized_points.crs)
 
@@ -75,7 +76,7 @@ class PromptSet:
         object.__setattr__(self, "bbox", normalized_bbox)
 
     @property
-    def crs(self) -> Optional[CRS]:
+    def crs(self) -> Any | None:
         """Return the shared CRS of the prompt set."""
         if self.points is not None and self.points.crs is not None:
             return self.points.crs
@@ -111,7 +112,7 @@ class PromptSet:
         """Return whether a bounding-box prompt is present."""
         return self.bbox is not None
 
-    def to_crs(self, crs: Union[CRS, str]) -> PromptSet:
+    def to_crs(self, crs: CrsLike) -> PromptSet:
         """Reproject the prompt set into another CRS.
 
         Parameters

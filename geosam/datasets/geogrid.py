@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import pprint
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import numpy as np
-from pyproj.crs import CRS
 from rasterio import Affine, transform, windows
 from rasterio.transform import array_bounds, rowcol, xy
 from rasterio.warp import calculate_default_transform
 
+from geosam.crs import crs_equal, crs_to_string, normalize_crs
 from geosam.logging import setup_logger
 from geosam.query import BoundingBox, Points
 
@@ -98,14 +98,14 @@ class GeoGridMixin:
         self._refresh_bounds()
 
     @property
-    def crs(self) -> CRS:
+    def crs(self) -> Any:
         """Coordinate reference system of the grid."""
         return self._crs
 
     @crs.setter
     def crs(self, value: CrsLike) -> None:
         """Set the coordinate reference system."""
-        self._crs = CRS.from_user_input(value)
+        self._crs = normalize_crs(value)
         self._refresh_bounds()
 
     @property
@@ -155,7 +155,7 @@ class GeoGrid(GeoGridMixin):
             "bounds": self.bounds.to_tuple(),
             "transform": tuple(self.transform),
             "shape": self.shape,
-            "crs": self.crs.to_string(),
+            "crs": crs_to_string(self.crs),
         }
         repr_str = f" {pprint.pformat(info, indent=2, sort_dicts=False).strip('{}')}"
         return f"GeoGrid(\n{repr_str}\n)"
@@ -220,8 +220,8 @@ class GeoGrid(GeoGridMixin):
         dst_width = None if shape is None else shape[1]
         dst_height = None if shape is None else shape[0]
         affine_transform, width, height = calculate_default_transform(
-            self.crs,
-            crs,
+            crs_to_string(self.crs),
+            crs_to_string(normalize_crs(crs)),
             self.width,
             self.height,
             left,
@@ -344,7 +344,9 @@ class GeoGrid(GeoGridMixin):
         strict: bool = True,
     ) -> tuple[np.ndarray, Optional[np.ndarray]]:
         """Convert geographic points into pixel prompt coordinates."""
-        projected = points if points.crs == self.crs else points.to_crs(self.crs)
+        projected = (
+            points if crs_equal(points.crs, self.crs) else points.to_crs(self.crs)
+        )
         row_values, col_values = self.row_col(projected.x, projected.y, op=float)
         coordinates = np.column_stack([col_values, row_values]).astype(np.float32)
         self._validate_point_prompt(coordinates, strict=strict)
@@ -359,7 +361,7 @@ class GeoGrid(GeoGridMixin):
         strict: bool = True,
     ) -> tuple[float, float, float, float]:
         """Convert a geographic bounding box into a pixel ``xyxy`` prompt."""
-        projected = bbox if bbox.crs == self.crs else bbox.to_crs(self.crs)
+        projected = bbox if crs_equal(bbox.crs, self.crs) else bbox.to_crs(self.crs)
         row_values, col_values = self.row_col(
             [projected.left, projected.right, projected.right, projected.left],
             [projected.top, projected.top, projected.bottom, projected.bottom],
@@ -433,15 +435,15 @@ def xy_from_transform(
 def format_bounds_and_crs(
     bounds: Union[BoundingBox, tuple[float, float, float, float]],
     crs: Optional[CrsLike],
-) -> tuple[BoundingBox, CRS]:
+) -> tuple[BoundingBox, Any]:
     """Normalize bounds and CRS input."""
     if not isinstance(bounds, BoundingBox):
         left, bottom, right, top = bounds
         bounds = BoundingBox(left, bottom, right, top, crs=crs)
 
     if crs is not None:
-        resolved_crs = CRS.from_user_input(crs)
-        if bounds.crs is not None and bounds.crs != resolved_crs:
+        resolved_crs = normalize_crs(crs)
+        if bounds.crs is not None and not crs_equal(bounds.crs, resolved_crs):
             bounds = bounds.to_crs(resolved_crs)
         return bounds, resolved_crs
 

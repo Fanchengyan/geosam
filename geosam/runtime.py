@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
+from geosam.crs import crs_equal
 from geosam.datasets import RasterDataset
 from geosam.logging import setup_logger
 from geosam.models import ModelSpec
@@ -431,7 +432,7 @@ def chip_extent_rectangles_for_source(
         )
         roi_bounds = (
             extent_bounds
-            if extent_bounds.crs == dataset.crs
+            if crs_equal(extent_bounds.crs, dataset.crs)
             else extent_bounds.to_crs(dataset.crs)
         )
         intersection = roi_bounds & dataset.bounds

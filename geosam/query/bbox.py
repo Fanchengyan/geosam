@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
-import geopandas as gpd
-from pyproj.crs import CRS
-from rasterio.warp import transform_bounds
 from shapely.geometry import box
 
+from geosam.crs import crs_equal, crs_to_string, normalize_crs, transform_bounds
 from geosam.logging import setup_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    import geopandas as gpd
     from shapely.geometry.base import BaseGeometry
 
     from geosam.typing import CrsLike
@@ -64,7 +63,7 @@ class BoundingBox:
         self.bottom = float(bottom)
         self.right = float(right)
         self.top = float(top)
-        self._crs = CRS.from_user_input(crs) if crs is not None else None
+        self._crs = normalize_crs(crs) if crs is not None else None
 
     def __repr__(self) -> str:
         """Return the representation of the bounding box."""
@@ -87,7 +86,14 @@ class BoundingBox:
             and self.bottom == other.bottom
             and self.right == other.right
             and self.top == other.top
-            and self.crs == other.crs
+            and (
+                self.crs == other.crs
+                or (
+                    self.crs is not None
+                    and other.crs is not None
+                    and crs_equal(self.crs, other.crs)
+                )
+            )
         )
 
     @overload
@@ -117,7 +123,7 @@ class BoundingBox:
         return self.intersection(other)
 
     @property
-    def crs(self) -> Optional[CRS]:
+    def crs(self) -> Any | None:
         """Coordinate reference system of the bounding box."""
         return self._crs
 
@@ -143,9 +149,13 @@ class BoundingBox:
 
     def _ensure_shared_crs(
         self, other: BoundingBox
-    ) -> tuple[BoundingBox, Optional[CRS]]:
+    ) -> tuple[BoundingBox, Any | None]:
         """Convert the other bounding box to the same CRS when possible."""
-        if self.crs == other.crs:
+        if self.crs == other.crs or (
+            self.crs is not None
+            and other.crs is not None
+            and crs_equal(self.crs, other.crs)
+        ):
             return other, self.crs
 
         if self.crs is None or other.crs is None:
@@ -158,29 +168,22 @@ class BoundingBox:
 
         return other.to_crs(self.crs), self.crs
 
-    def set_crs(self, crs: Union[CRS, str]) -> None:
+    def set_crs(self, crs: CrsLike) -> None:
         """Assign a CRS without reprojection."""
-        self._crs = CRS.from_user_input(crs)
+        self._crs = normalize_crs(crs)
 
-    def to_crs(self, crs: Union[CRS, str]) -> BoundingBox:
+    def to_crs(self, crs: CrsLike) -> BoundingBox:
         """Reproject the bounding box."""
         if self.crs is None:
             msg = "Cannot reproject a bounding box without a source CRS."
             logger.error(msg)
             raise ValueError(msg)
 
-        target_crs = CRS.from_user_input(crs)
-        if self.crs == target_crs:
+        target_crs = normalize_crs(crs)
+        if crs_equal(self.crs, target_crs):
             return self
 
-        left, bottom, right, top = transform_bounds(
-            self.crs,
-            target_crs,
-            self.left,
-            self.bottom,
-            self.right,
-            self.top,
-        )
+        left, bottom, right, top = transform_bounds(self, target_crs)
         return BoundingBox(left, bottom, right, top, crs=target_crs)
 
     def to_tuple(self) -> tuple[float, float, float, float]:
@@ -202,7 +205,10 @@ class BoundingBox:
 
     def to_geodataframe(self) -> gpd.GeoDataFrame:
         """Convert the bounding box to a GeoDataFrame."""
-        return gpd.GeoDataFrame(geometry=[self.to_geometry()], crs=self.crs)
+        import geopandas as gpd
+
+        crs = None if self.crs is None else crs_to_string(self.crs)
+        return gpd.GeoDataFrame(geometry=[self.to_geometry()], crs=crs)
 
     def union(self, other: BoundingBox) -> BoundingBox:
         """Return the minimum box covering both bounding boxes."""

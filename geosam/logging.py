@@ -1,7 +1,8 @@
-"""Logging utilities for geosam.
+"""Runtime-aware logging utilities for :mod:`geosam`.
 
-This module provides enhanced logging functionality with colored output,
-tqdm integration, custom SUCCESS log level, and smart default levels.
+The default backend writes through Python's :mod:`logging` handlers. When the
+runtime backend is configured as QGIS, messages are routed to the QGIS message
+log so plugin users can see them from the QGIS interface.
 """
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
+
+from geosam.context import get_runtime
 
 try:
     from tqdm import tqdm
@@ -26,9 +29,6 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
 
     tqdm = _TqdmFallback
 
-# Optional imports with fallbacks
-
-
 if TYPE_CHECKING:
     from os import PathLike
 
@@ -36,6 +36,7 @@ __all__ = [
     "SUCCESS",
     "GeosamLogger",
     "LogLevel",
+    "RuntimeLoggingHandler",
     "formatter",
     "get_default_log_level",
     "setup_logger",
@@ -43,24 +44,14 @@ __all__ = [
     "tqdm_handler",
 ]
 
-# Custom log levels
-SUCCESS: Literal[25] = 25  # Between INFO and WARNING
-
-# Type aliases
+SUCCESS: Literal[25] = 25
 LogLevel = Literal["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
-if TYPE_CHECKING:
-    HandlerType = logging.Handler | list[logging.Handler]
 
-# Register SUCCESS level name
 logging.addLevelName(SUCCESS, "SUCCESS")
 
 
 class GeosamLogger(logging.Logger):
-    """Enhanced logger with SUCCESS level support.
-
-    This logger extends the standard logging.Logger with a custom
-    SUCCESS level (25) that sits between INFO and WARNING.
-    """
+    """Logger with a GeoSAM-specific success level."""
 
     def success(self, message: object, *args: Any, **kwargs: Any) -> None:
         """Log a message with SUCCESS level.
@@ -68,37 +59,69 @@ class GeosamLogger(logging.Logger):
         Parameters
         ----------
         message : object
-            The message to log.
+            Message to log.
         *args : Any
-            Positional arguments for message formatting.
+            Positional logging arguments.
         **kwargs : Any
-            Keyword arguments for logging.
+            Keyword logging arguments.
 
         """
         if self.isEnabledFor(SUCCESS):
             self._log(SUCCESS, message, args, **kwargs)
 
 
-# Set the custom logger class globally so logging.getLogger returns it
 logging.setLoggerClass(GeosamLogger)
 
-# Formatters
 formatter = logging.Formatter(
     "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# Handlers
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setFormatter(formatter)
+
+class RuntimeLoggingHandler(logging.Handler):
+    """Logging handler that dispatches records to the active runtime backend."""
+
+    def __init__(self, stream: Any = sys.stdout) -> None:
+        """Initialize the runtime logging handler.
+
+        Parameters
+        ----------
+        stream : Any, optional
+            Native Python output stream.
+
+        """
+        super().__init__()
+        self.stream = stream
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record with the active backend."""
+        try:
+            message = self.format(record)
+            if get_runtime().backend == "qgis":
+                self._emit_qgis(record, message)
+                return
+            print(message, file=self.stream)
+            self.flush()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:  # pragma: no cover - logging safety net
+            self.handleError(record)
+
+    def _emit_qgis(self, record: logging.LogRecord, message: str) -> None:
+        """Emit a log record to QGIS message log."""
+        from qgis.core import Qgis, QgsMessageLog
+
+        if record.levelno >= logging.ERROR:
+            level = Qgis.MessageLevel.Critical
+        elif record.levelno >= logging.WARNING:
+            level = Qgis.MessageLevel.Warning
+        else:
+            level = Qgis.MessageLevel.Info
+        QgsMessageLog.logMessage(message, "GeoSAM", level)
 
 
-class TqdmLoggingHandler(logging.StreamHandler):  # type: ignore[type-arg]
-    """A logging handler that works with tqdm progress bars.
-
-    This handler ensures log messages don't interfere with tqdm
-    progress bar display by using tqdm.write().
-    """
+class TqdmLoggingHandler(RuntimeLoggingHandler):
+    """A runtime-aware logging handler that respects tqdm in native mode."""
 
     def __init__(self, tqdm_class: type[tqdm] = tqdm) -> None:  # type: ignore[assignment]
         """Initialize the tqdm logging handler.
@@ -106,17 +129,20 @@ class TqdmLoggingHandler(logging.StreamHandler):  # type: ignore[type-arg]
         Parameters
         ----------
         tqdm_class : type[tqdm], optional
-            The tqdm class to use for writing, by default tqdm.
+            Class used for progress-aware native writes.
 
         """
         super().__init__()
         self.tqdm_class = tqdm_class
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Emit a log record using tqdm.write()."""
+        """Emit a log record using QGIS or tqdm-aware native output."""
+        if get_runtime().backend == "qgis":
+            super().emit(record)
+            return
         try:
-            msg = self.format(record)
-            self.tqdm_class.write(msg, file=self.stream)
+            message = self.format(record)
+            self.tqdm_class.write(message, file=self.stream)
             self.flush()
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -124,155 +150,117 @@ class TqdmLoggingHandler(logging.StreamHandler):  # type: ignore[type-arg]
             self.handleError(record)
 
 
+stream_handler = RuntimeLoggingHandler(sys.stdout)
+stream_handler.setFormatter(formatter)
+
 tqdm_handler = TqdmLoggingHandler()
 tqdm_handler.setLevel(logging.INFO)
 tqdm_handler.setFormatter(formatter)
 
 
-class GeosamLogger(logging.Logger):
-    """Enhanced logger with SUCCESS level support.
-
-    This logger extends the standard logging.Logger with a custom
-    SUCCESS level (25) that sits between INFO and WARNING.
-    """
-
-    def success(self, message: object, *args: Any, **kwargs: Any) -> None:
-        """Log a message with SUCCESS level.
-
-        Parameters
-        ----------
-        message : object
-            The message to log.
-        *args : Any
-            Positional arguments for message formatting.
-        **kwargs : Any
-            Keyword arguments for logging.
-
-        """
-        if self.isEnabledFor(SUCCESS):
-            self._log(SUCCESS, message, args, **kwargs)
-
-
 def get_default_log_level() -> int:
-    """Get default log level based on environment.
+    """Get the default log level from GeoSAM environment settings.
 
-    Order of precedence:
-    1) FANINSAR_LOG_LEVEL environment variable (DEBUG/INFO/...)
-    2) FANINSAR_DEBUG=1 (or true/yes/on)
-    3) Heuristic dev detection (DEBUG/ENV/interactive/tests)
-    4) Fallback: INFO
+    Returns
+    -------
+    int
+        Python logging level.
+
     """
-    # Explicit level override
-    log_level_str = os.getenv("FANINSAR_LOG_LEVEL", "").upper()
+    log_level_str = os.getenv("GEOSAM_LOG_LEVEL", "").upper()
+    if not log_level_str:
+        log_level_str = os.getenv("FANINSAR_LOG_LEVEL", "").upper()
     if log_level_str in {"DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}:
-        # Map SUCCESS to INFO threshold for enablement
         return getattr(logging, log_level_str if log_level_str != "SUCCESS" else "INFO")
 
-    # Debug flag
-    if os.getenv("FANINSAR_DEBUG", "0").lower() in {"1", "true", "yes", "on"}:
+    debug_flag = os.getenv("GEOSAM_DEBUG", os.getenv("FANINSAR_DEBUG", "0"))
+    if debug_flag.lower() in {"1", "true", "yes", "on"}:
         return logging.DEBUG
 
-    # Heuristic dev detection
     dev_indicators = [
         os.getenv("ENVIRONMENT") in ("dev", "development", "local"),
         os.getenv("ENV") in ("dev", "development", "local"),
         os.getenv("DEBUG", "0").lower() in {"1", "true", "yes", "on"},
         sys.argv and sys.argv[0].endswith(("pytest", "python", "ipython")),
         any("test" in arg for arg in sys.argv),
-        hasattr(sys, "ps1"),  # Interactive
+        hasattr(sys, "ps1"),
     ]
     if any(dev_indicators):
         return logging.DEBUG
-
-    # Default production-like
     return logging.INFO
 
 
 def setup_logger(
-    name: Optional[str] = None,
-    file: Optional[Union[str, PathLike[str]]] = None,  # type: ignore[name-defined]
+    name: str | None = None,
+    file: str | PathLike[str] | None = None,
     *,
-    # Backward-compatible aliases
-    log_name: Optional[str] = None,
-    log_file: Optional[Union[str, PathLike[str]]] = None,  # type: ignore[name-defined]
-    handler: Union[logging.Handler, list[logging.Handler]] = stream_handler,  # type: ignore[assignment]
-    level: Optional[int] = None,
+    log_name: str | None = None,
+    log_file: str | PathLike[str] | None = None,
+    handler: logging.Handler | list[logging.Handler] = stream_handler,
+    level: int | None = None,
     propagate: bool = True,
     clear_existing: bool = False,
 ) -> GeosamLogger:
-    """Create and configure a logger.
+    """Create and configure a runtime-aware logger.
 
     Parameters
     ----------
     name : str | None, optional
-        Logger name. If None, uses "geosam".
-    log_name : str | None, optional
-        Alias for ``name``; if provided and ``name`` is None, this value is used.
+        Logger name. If omitted, ``"geosam"`` is used.
     file : str | PathLike[str] | None, optional
-        If provided, also log to this file.
+        Optional file destination.
+    log_name : str | None, optional
+        Backward-compatible alias for ``name``.
     log_file : str | PathLike[str] | None, optional
-        Alias for ``file``; if provided and ``file`` is None, this value is used.
+        Backward-compatible alias for ``file``.
     handler : logging.Handler | list[logging.Handler], optional
-        Logging handler(s) to add, by default ``stream_handler``.
+        Handler or handlers to attach.
     level : int | None, optional
-        Logging level for all handlers. If None, uses ``get_default_log_level()``.
+        Handler level. Defaults to :func:`get_default_log_level`.
     propagate : bool, optional
-        Whether to propagate to parent loggers, by default True.
+        Whether records propagate to parent loggers.
     clear_existing : bool, optional
-        Whether to clear existing handlers on the logger, by default False.
+        Whether existing handlers are cleared first.
 
     Returns
     -------
-    FaninsarLogger
-        Configured logger instance with SUCCESS level support.
+    GeosamLogger
+        Configured logger instance.
 
     """
-    # Resolve aliases
-    if name is None:
-        name = log_name or "faninsar"
-    if file is None and log_file is not None:
-        file = log_file
-
-    # Determine level
+    logger_name = name or log_name or "geosam"
+    file_target = file if file is not None else log_file
     effective_level = get_default_log_level() if level is None else level
     if not isinstance(effective_level, int) or effective_level < 0:
-        msg = f"Invalid logging level: {level}"
-        raise ValueError(msg)
+        message = f"Invalid logging level: {level}"
+        raise ValueError(message)
 
-    # Get or create logger and set base config
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)  # Allow handlers to filter
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.DEBUG)
     logger.propagate = propagate
-
-    # Clear existing handlers if requested
     if clear_existing:
         logger.handlers.clear()
 
-    # Normalize handlers list
-    handlers: list[logging.Handler] = (
-        [handler] if not isinstance(handler, list) else list(handler)
-    )
+    handlers = [handler] if isinstance(handler, logging.Handler) else list(handler)
+    for log_handler in handlers:
+        if not isinstance(log_handler, logging.Handler):
+            message = f"Expected logging.Handler, got {type(log_handler)}"
+            raise TypeError(message)
+        log_handler.setLevel(effective_level)
+        if log_handler.formatter is None:
+            log_handler.setFormatter(formatter)
 
-    # Validate and set level on handlers
-    for h in handlers:
-        if not isinstance(h, logging.Handler):
-            msg = f"Expected logging.Handler, got {type(h)}"
-            raise TypeError(msg)
-        h.setLevel(effective_level)
-
-    # Optional file handler
-    if file is not None:
-        file_path = Path(file)
+    if file_target is not None:
+        file_path = Path(file_target)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(file_path)
         file_handler.setLevel(effective_level)
         file_handler.setFormatter(formatter)
         handlers.append(file_handler)
 
-    # Attach handlers (avoid duplicates)
-    existing_ids = {id(h) for h in logger.handlers}
-    for h in handlers:
-        if id(h) not in existing_ids:
-            logger.addHandler(h)
+    existing_ids = {id(existing_handler) for existing_handler in logger.handlers}
+    for log_handler in handlers:
+        if id(log_handler) not in existing_ids:
+            logger.addHandler(log_handler)
 
     return logger  # type: ignore[return-value]
