@@ -9,22 +9,30 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "geopandas>=1.0.1",
-    "pyarrow>=18.1.0",
-    "pyproj>=3.6.1",
-    "rasterio>=1.4.3",
-    "shapely>=2.0.7",
     "typing-extensions>=4.15.0",
-    "ultralytics>=8.4.33",
 ]
 
 
 [project.optional-dependencies]
 
+geospatial = [
+    "geopandas>=1.0.1",
+    "pyarrow>=18.1.0",
+    "pyproj>=3.6.1",
+    "rasterio>=1.4.3",
+    "shapely>=2.0.7",
+]
+ai = [
+    "ultralytics>=8.4.33",
+]
+all = [
+    "geosam[geospatial, ai]",
+]
+
 code_style = ["pre-commit", "ruff"]
-test = ["geosam", "coverage", "pytest", "pytest-cov"]
+test = ["geosam[all]", "coverage", "pytest", "pytest-cov"]
 docs = [
-    "geosam",
+    "geosam[all]",
     "recommonmark",
     "sphinx>=7",
     "myst-nb",
@@ -36,7 +44,7 @@ docs = [
     "myst-sphinx-gallery",
 ]
 
-dev = ["geosam[code_style, test, docs]"]
+dev = ["geosam[all, code_style, test, docs]"]
 
 
 [tool.setuptools.packages.find]
@@ -47,6 +55,7 @@ exclude = ["tests*", "docs*", "examples*", "outputs*"]
 [tool.ruff]
 line-length = 88
 fix = true
+force-exclude = true
 target-version = "py39"
 exclude = [
     # commonly ignored directories.
@@ -85,6 +94,7 @@ exclude = [
     "examples",
     "data",
     "geosam.egg-info",
+    "main.py",
 ]
 
 [tool.ruff.lint]
